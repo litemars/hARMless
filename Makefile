@@ -27,7 +27,7 @@ LOADER_BIN := $(BUILD_DIR)/loader
 STUBGEN_BIN := $(BUILD_DIR)/stubgen
 
 # Source files
-PACKER_SOURCES := $(PACKER_DIR)/packer.c $(PACKER_DIR)/rc4.c
+PACKER_SOURCES := $(PACKER_DIR)/packer.c $(PACKER_DIR)/rc4.c $(PACKER_DIR)/elf64.c
 LOADER_SOURCES := $(LOADER_DIR)/loader.c $(LOADER_DIR)/memexec.c $(PACKER_DIR)/elf64.c $(PACKER_DIR)/rc4.c
 STUBGEN_SOURCES := $(STUBGEN_DIR)/stubgen.c
 

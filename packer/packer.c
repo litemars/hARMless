@@ -72,8 +72,16 @@ void generate_random_key(uint8_t* key, size_t key_size) {
     FILE* urandom = fopen("/dev/urandom", "rb");
 
     if (urandom) {
-        fread(key, 1, key_size, urandom);
-        fclose(urandom);
+        if (fread(key, 1, key_size, urandom) != key_size) {
+            // Fallback if read failed
+            fclose(urandom);
+            srand(time(NULL));
+            for (i = 0; i < key_size; i++) {
+                key[i] = rand() & 0xFF;
+            }
+        } else {
+            fclose(urandom);
+        }
     } else {
         // Fallback to poor quality random
         srand(time(NULL));
@@ -83,21 +91,6 @@ void generate_random_key(uint8_t* key, size_t key_size) {
     }
 }
 
-int is_elf64(const void* data) {
-    const Elf64_Ehdr* ehdr = (const Elf64_Ehdr*)data;
-
-    return (ehdr->e_ident[0] == ELFMAG0 &&
-            ehdr->e_ident[1] == ELFMAG1 &&
-            ehdr->e_ident[2] == ELFMAG2 &&
-            ehdr->e_ident[3] == ELFMAG3 &&
-            ehdr->e_ident[4] == ELFCLASS64);
-}
-
-int is_elf64_arm64(const void* data) {
-    const Elf64_Ehdr* ehdr = (const Elf64_Ehdr*)data;
-
-    return is_elf64(data) && ehdr->e_machine == EM_AARCH64;
-}
 
 void print_usage(const char* program_name) {
     printf("Usage: %s <input_elf> <output_packed>\n", program_name);
@@ -135,7 +128,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Read input file
-    uint8_t* file_data = malloc(file_size);
+    uint8_t* file_data = calloc(file_size, 1);
     if (!file_data) {
         fprintf(stderr, "Error: Cannot allocate memory for file data\n");
         fclose(input_fp);
@@ -150,9 +143,10 @@ int main(int argc, char* argv[]) {
     }
     fclose(input_fp);
 
-    // Verify it's an ARM64 ELF file
-    if (!is_elf64_arm64(file_data)) {
-        fprintf(stderr, "Error: Input file is not an ARM64 ELF binary\n");
+    // Verify it's an ARM64 ELF executable file
+    if (!is_elf64_arm64(file_data) ||
+        !validate_elf64_executable((const Elf64_Ehdr*)file_data, file_size)) {
+        fprintf(stderr, "Error: Input file is not a valid ARM64 ELF executable\n");
         free(file_data);
         return 1;
     }
@@ -165,7 +159,7 @@ int main(int argc, char* argv[]) {
 
     uint32_t original_crc = crc32(file_data, file_size);
 
-    uint8_t* encrypted_data = malloc(file_size);
+    uint8_t* encrypted_data = calloc(file_size, 1);
     if (!encrypted_data) {
         fprintf(stderr, "Error: Cannot allocate memory for encrypted data\n");
         free(file_data);
