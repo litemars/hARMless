@@ -2,6 +2,7 @@
 #define ELF64_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 // ELF64 structures for ARM64
 typedef uint16_t Elf64_Half;
@@ -99,6 +100,7 @@ typedef struct {
 
 int is_elf64(const void* data);
 int is_elf64_arm64(const void* data);
+int validate_elf64_executable(const Elf64_Ehdr* ehdr, size_t file_size);
 void print_elf64_header(const Elf64_Ehdr* ehdr);
 
 #endif // ELF64_H

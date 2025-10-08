@@ -65,7 +65,7 @@ int main(int argc, char* argv[]) {
         goto cleanup;
     }
 
-    loader_data = malloc(loader_size);
+    loader_data = calloc(loader_size, 1);
     if (!loader_data) {
         fprintf(stderr, "Error: Cannot allocate memory for loader data\n");
         goto cleanup;
@@ -76,7 +76,7 @@ int main(int argc, char* argv[]) {
         goto cleanup;
     }
 
-    packed_data = malloc(packed_size);
+    packed_data = calloc(packed_size, 1);
     if (!packed_data) {
         fprintf(stderr, "Error: Cannot allocate memory for packed data\n");
         goto cleanup;

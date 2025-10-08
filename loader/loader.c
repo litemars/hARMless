@@ -75,7 +75,12 @@ pack_header_t* find_packed_header(const uint8_t* data, size_t data_size) {
     for (i = data_size - sizeof(pack_header_t); i > 0; i--) {
         header = (pack_header_t*)(data + i);
         if (header->magic == PACKED_MAGIC) {
-            return header;
+            if (header->original_size > 0 &&
+                header->packed_size > 0 &&
+                header->key_size > 0 && header->key_size <= MAX_KEY_SIZE &&
+                (uint8_t*)header + sizeof(pack_header_t) + header->packed_size <= data + data_size) {
+                return header;
+            }
         }
     }
 
@@ -83,6 +88,7 @@ pack_header_t* find_packed_header(const uint8_t* data, size_t data_size) {
 }
 
 int main(int argc, char* argv[], char* envp[]) {
+    (void)argc;
     FILE* self_fp;
     uint8_t* self_data;
     size_t self_size;
@@ -101,7 +107,7 @@ int main(int argc, char* argv[], char* envp[]) {
     self_size = ftell(self_fp);
     fseek(self_fp, 0, SEEK_SET);
 
-    self_data = malloc(self_size);
+    self_data = calloc(self_size, 1);
     if (!self_data) {
         fprintf(stderr, "Error: Cannot allocate memory for self data\n");
         fclose(self_fp);
@@ -131,7 +137,7 @@ int main(int argc, char* argv[], char* envp[]) {
         return 1;
     }
 
-    decrypted_data = malloc(header->original_size);
+    decrypted_data = calloc(header->original_size, 1);
     if (!decrypted_data) {
         fprintf(stderr, "Error: Cannot allocate memory for decrypted data\n");
         free(self_data);
@@ -148,8 +154,9 @@ int main(int argc, char* argv[], char* envp[]) {
         return 1;
     }
 
-    if (!is_elf64(decrypted_data)) {
-        fprintf(stderr, "Error: Decrypted data is not a valid ELF\n");
+    if (!is_elf64_arm64(decrypted_data) ||
+        !validate_elf64_executable((const Elf64_Ehdr*)decrypted_data, header->original_size)) {
+        fprintf(stderr, "Error: Decrypted data is not a valid ARM64 executable ELF\n");
         free(self_data);
         free(decrypted_data);
         return 1;
