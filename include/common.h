@@ -37,6 +37,15 @@ typedef struct {
 #define __NR_close           57
 #define __NR_mmap           222
 #define __NR_munmap         215
+
+// Linux-specific mmap flags (not exposed without _GNU_SOURCE)
+#ifndef MAP_ANON
+#define MAP_ANON     0x20   /* ARM64/x86: anonymous mapping           */
+#endif
+#ifndef MAP_POPULATE
+#define MAP_POPULATE 0x8000 /* ARM64/x86: prefault pages at mmap time */
+#endif
+
 #define __NR_execve         221
 #define __NR_memfd_create   279
 #define __NR_ftruncate       46
@@ -223,6 +232,18 @@ static inline long syscall3_obf(long number, long arg1, long arg2, long arg3) {
     long obf_number = number ^ 0xDEADBEEF;
     return syscall3(obf_number, arg1, arg2, arg3);
 }
+
+// Add -DDEBUG on the TARGET_CFLAGS in the Makefile to show the debug
+#ifdef DEBUG
+static inline void debug_print(const char *msg) {
+    size_t len = 0;
+    while (msg[len]) len++;
+    syscall3(__NR_write, 2, (long)msg, (long)len);
+}
+#define DBG(msg) debug_print("[hARMless] " msg)
+#else
+#define DBG(msg) ((void)0)
+#endif
 
 // Function prototypes
 uint32_t crc32(const uint8_t* data, size_t len);

@@ -173,7 +173,8 @@ out_close_uring:
 /* ========================================================================= */
 
 int execute_from_memory(const uint8_t* elf_data, size_t elf_size, char* const argv[], char* const envp[]) {
-    // Allocate randomized address space to leverage ASLR
+
+   // Allocate randomized address space to leverage ASLR
     void *randomized_base = (void *)syscall6(__NR_mmap, (long)NULL, elf_size, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (randomized_base == MAP_FAILED) {
         return -1;
@@ -197,6 +198,7 @@ int execute_from_memory(const uint8_t* elf_data, size_t elf_size, char* const ar
     /* ------------------------------------------------------------------
      * Path A: mmap the memfd PROT_WRITE and byte-copy the ELF into it.
      * ------------------------------------------------------------------ */
+    DBG("write path: mmap\n");
     uint8_t *map = (uint8_t *)syscall6(__NR_mmap, (long)NULL, elf_size, PROT_WRITE, MAP_SHARED, memfd, 0);
     size_t i;
     if (map == MAP_FAILED) {
@@ -226,6 +228,7 @@ int execute_from_memory(const uint8_t* elf_data, size_t elf_size, char* const ar
      * Path B: write the ELF into the memfd via io_uring IORING_OP_WRITE.
      * Requires kernel >= 5.1. No liburing — raw syscalls only.
      * ------------------------------------------------------------------ */
+    DBG("write path: io_uring\n");
     if (write_via_io_uring(memfd, elf_data, elf_size) < 0) {
         syscall1(__NR_close, memfd);
         syscall2(__NR_munmap, (long)randomized_base, elf_size);
@@ -236,6 +239,7 @@ int execute_from_memory(const uint8_t* elf_data, size_t elf_size, char* const ar
     /* ------------------------------------------------------------------
      * Path C: plain write(2) syscall (original default).
      * ------------------------------------------------------------------ */
+    DBG("write path: plain write(2)\n");
     if (syscall3(__NR_write, memfd, (long)elf_data, elf_size) != (long)elf_size) {
         syscall1(__NR_close, memfd);
         syscall2(__NR_munmap, (long)randomized_base, elf_size);
