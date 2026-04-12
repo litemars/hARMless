@@ -10,7 +10,8 @@ endif
 
 # Compiler flags
 CFLAGS := -Wall -Wextra -O2 -std=c99
-TARGET_CFLAGS := -Wall -Wextra -O2 -std=c99 -static -DCOPY_WITH_MMAP
+# Write method: choose one of -DCOPY_WITH_MMAP, -DCOPY_WITH_IO_URING, or neither (plain write syscall)
+TARGET_CFLAGS := -Wall -Wextra -O2 -std=c99 -static -DCOPY_WITH_IO_URING
 LDFLAGS := -static
 
 # OpenSSL flags - prefer shared libraries to avoid static linking warnings
@@ -56,7 +57,7 @@ $(PACKER_BIN): $(PACKER_SOURCES)
 $(LOADER_BIN): $(LOADER_SOURCES)
 	$(TARGET_CC) $(TARGET_CFLAGS) $(STEALTH_FLAGS) $(OPENSSL_CFLAGS) $(INCLUDES) -o $@ $^ $(OPENSSL_LDFLAGS) 2>/dev/null || $(TARGET_CC) $(TARGET_CFLAGS) $(STEALTH_FLAGS) $(OPENSSL_CFLAGS) $(INCLUDES) -o $@ $^ $(OPENSSL_LDFLAGS) -lzstd -lz
 
-# Build stub generator 
+# Build stub generator
 $(STUBGEN_BIN): $(STUBGEN_SOURCES)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^ $(LDFLAGS)
 
