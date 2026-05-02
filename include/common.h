@@ -223,16 +223,6 @@ static inline long syscall6(long number, long arg1, long arg2, long arg3, long a
     return ret;
 }
 
-static inline long syscall_obf(long number, long arg1) {
-    long obf_number = number ^ 0xDEADBEEF;
-    return syscall1(obf_number, arg1);
-}
-
-static inline long syscall3_obf(long number, long arg1, long arg2, long arg3) {
-    long obf_number = number ^ 0xDEADBEEF;
-    return syscall3(obf_number, arg1, arg2, arg3);
-}
-
 // Add -DDEBUG on the TARGET_CFLAGS in the Makefile to show the debug
 #ifdef DEBUG
 static inline void debug_print(const char *msg) {
