@@ -6,18 +6,6 @@
 #include <openssl/rand.h>
 #include <openssl/err.h>
 
-/*
- * Obfuscated ARM64 syscall number table.
- *
- * Each entry is the actual asm-generic/unistd.h __NR_* value XOR'd with
- * SC_XOR_KEY. The __NR_* macros in common.h load from this table at
- * runtime and XOR with the key to recover the real number, so the
- * literal numbers (63, 64, 222, 279, 425...) never appear as immediates
- * in the loader's instruction stream.
- *
- * `volatile` defeats compiler / LTO constant-folding back to the
- * literals. `const` keeps the table in .rodata.
- */
 const volatile uint32_t hARMless_sc[SC_TABLE_LEN] = {
     [SC_IDX_READ]              =  63u ^ SC_XOR_KEY,
     [SC_IDX_WRITE]             =  64u ^ SC_XOR_KEY,

