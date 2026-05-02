@@ -121,9 +121,7 @@ int main(int argc, char* argv[]) {
     printf("Packing ARM64 ELF binary: %s\n", input_file);
     printf("Original size: %zu bytes\n", file_size);
 
-    
-    apply_arm64_obfuscation(file_data, file_size);
-    
+    strip_elf_metadata(file_data, file_size);
 
     uint32_t original_crc = crc32(file_data, file_size);
     uint8_t* encrypted_data = malloc(file_size);

@@ -11,6 +11,60 @@
 #include "elf64.h"
 #include "crypto.h"
 
+#define OBF_KEY 0x5A
+
+static const uint8_t obf_gdb[]      = {0x3D, 0x3E, 0x38};
+static const uint8_t obf_strace[]   = {0x29, 0x2E, 0x28, 0x3B, 0x39, 0x3F};
+static const uint8_t obf_ltrace[]   = {0x36, 0x2E, 0x28, 0x3B, 0x39, 0x3F};
+static const uint8_t obf_radare2[]  = {0x28, 0x3B, 0x3E, 0x3B, 0x28, 0x3F, 0x68};
+static const uint8_t obf_objdump[]  = {0x35, 0x38, 0x30, 0x3E, 0x2F, 0x37, 0x2A};
+static const uint8_t obf_hexdump[]  = {0x32, 0x3F, 0x22, 0x3E, 0x2F, 0x37, 0x2A};
+static const uint8_t obf_ghidra[]   = {0x3D, 0x32, 0x33, 0x3E, 0x28, 0x3B};
+
+static const struct { const uint8_t* obf; size_t len; } tool_names[] = {
+    { obf_gdb,     sizeof(obf_gdb)     },
+    { obf_strace,  sizeof(obf_strace)  },
+    { obf_ltrace,  sizeof(obf_ltrace)  },
+    { obf_radare2, sizeof(obf_radare2) },
+    { obf_objdump, sizeof(obf_objdump) },
+    { obf_hexdump, sizeof(obf_hexdump) },
+    { obf_ghidra,  sizeof(obf_ghidra)  },
+};
+
+static const uint8_t obf_hypervisor[] = {0x32, 0x23, 0x2A, 0x3F, 0x28, 0x2C, 0x33, 0x29, 0x35, 0x28};
+static const uint8_t obf_qemu[]       = {0x2B, 0x3F, 0x37, 0x2F};
+static const uint8_t obf_kvm[]        = {0x31, 0x2C, 0x37};
+static const uint8_t obf_xen[]        = {0x22, 0x3F, 0x34};
+static const uint8_t obf_vmware[]     = {0x2C, 0x37, 0x2D, 0x3B, 0x28, 0x3F};
+static const uint8_t obf_virtualbox[] = {0x2C, 0x33, 0x28, 0x2E, 0x2F, 0x3B, 0x36, 0x38, 0x35, 0x22};
+
+static const struct { const uint8_t* obf; size_t len; } hyper_names[] = {
+    { obf_hypervisor, sizeof(obf_hypervisor) },
+    { obf_qemu,       sizeof(obf_qemu)       },
+    { obf_kvm,        sizeof(obf_kvm)        },
+    { obf_xen,        sizeof(obf_xen)        },
+    { obf_vmware,     sizeof(obf_vmware)     },
+    { obf_virtualbox, sizeof(obf_virtualbox) },
+};
+
+static const uint8_t obf_LD_PRELOAD[]   = {0x16, 0x1E, 0x05, 0x0A, 0x08, 0x1F, 0x16, 0x15, 0x1B, 0x1E};
+static const uint8_t obf_GDB_ENV[]      = {0x1D, 0x1E, 0x18};
+static const uint8_t obf_PTRACE_SCOPE[] = {0x0A, 0x0E, 0x08, 0x1B, 0x19, 0x1F, 0x05, 0x09, 0x19, 0x15, 0x0A, 0x1F};
+static const uint8_t obf_STRACE_LOG[]   = {0x09, 0x0E, 0x08, 0x1B, 0x19, 0x1F, 0x05, 0x16, 0x15, 0x1D};
+static const uint8_t obf_LTRACE_LOG[]   = {0x16, 0x0E, 0x08, 0x1B, 0x19, 0x1F, 0x05, 0x16, 0x15, 0x1D};
+static const uint8_t obf_RADARE2_LOG[]  = {0x08, 0x1B, 0x1E, 0x1B, 0x08, 0x1F, 0x68, 0x05, 0x16, 0x15, 0x1D};
+
+static const struct { const uint8_t* obf; size_t len; } env_names[] = {
+    { obf_LD_PRELOAD,   sizeof(obf_LD_PRELOAD)   },
+    { obf_GDB_ENV,      sizeof(obf_GDB_ENV)      },
+    { obf_PTRACE_SCOPE, sizeof(obf_PTRACE_SCOPE) },
+    { obf_STRACE_LOG,   sizeof(obf_STRACE_LOG)   },
+    { obf_LTRACE_LOG,   sizeof(obf_LTRACE_LOG)   },
+    { obf_RADARE2_LOG,  sizeof(obf_RADARE2_LOG)  },
+};
+
+static const uint8_t obf_TracerPid[] = {0x0E, 0x28, 0x3B, 0x39, 0x3F, 0x28, 0x0A, 0x33, 0x3E, 0x60};
+
 int detect_ptrace_arm64(void) {
     pid_t child = fork();
     if (child == 0) { 
@@ -30,15 +84,21 @@ int check_proc_status(void) {
     FILE* status_file = fopen("/proc/self/status", "r");
     if (!status_file) return 0;
 
+    char tracer_prefix[16];
+    deobf_str_xor(tracer_prefix, obf_TracerPid, sizeof(obf_TracerPid), OBF_KEY);
+    tracer_prefix[sizeof(obf_TracerPid)] = '\0';
+
     char line[256];
     while (fgets(line, sizeof(line), status_file)) {
-        if (strncmp(line, "TracerPid:", 10) == 0) {
-            int tracer_pid = atoi(line + 10);
+        if (strncmp(line, tracer_prefix, sizeof(obf_TracerPid)) == 0) {
+            int tracer_pid = atoi(line + sizeof(obf_TracerPid));
             fclose(status_file);
+            secure_memory_wipe(tracer_prefix, sizeof(tracer_prefix));
             return tracer_pid != 0;
         }
     }
     fclose(status_file);
+    secure_memory_wipe(tracer_prefix, sizeof(tracer_prefix));
     return 0;
 }
 
@@ -64,16 +124,18 @@ int check_parent_process(void) {
 
             parent_name[strcspn(parent_name, "\n")] = 0;
 
-            // Check for analysis tools
-            if (strcmp(parent_name, "gdb") == 0 ||
-                strcmp(parent_name, "strace") == 0 ||
-                strcmp(parent_name, "ltrace") == 0 ||
-                strcmp(parent_name, "radare2") == 0 ||
-                strcmp(parent_name, "objdump") == 0 ||
-                strcmp(parent_name, "hexdump") == 0 ||
-                strcmp(parent_name, "ghidra") == 0) {
-                return 1;
+            char decoded[16];
+            for (size_t i = 0; i < sizeof(tool_names) / sizeof(tool_names[0]); i++) {
+                size_t len = tool_names[i].len;
+                if (len >= sizeof(decoded)) continue;
+                deobf_str_xor(decoded, tool_names[i].obf, len, OBF_KEY);
+                decoded[len] = '\0';
+                if (strcmp(parent_name, decoded) == 0) {
+                    secure_memory_wipe(decoded, sizeof(decoded));
+                    return 1;
+                }
             }
+            secure_memory_wipe(decoded, sizeof(decoded));
         } else {
             fclose(comm_file);
         }
@@ -86,22 +148,30 @@ int detect_virtualization(void) {
     FILE* cpuinfo = fopen("/proc/cpuinfo", "r");
     if (!cpuinfo) return 0;
 
+    char decoded[16];
     char line[256];
     while (fgets(line, sizeof(line), cpuinfo)) {
         for (char* p = line; *p; p++) {
             if (*p >= 'A' && *p <= 'Z') *p += 32;
         }
 
-        if (strstr(line, "hypervisor") || strstr(line, "qemu") || 
-            strstr(line, "kvm") || strstr(line, "xen") ||
-            strstr(line, "vmware") || strstr(line, "virtualbox")) {
-            fclose(cpuinfo);
-            return 1;
+        for (size_t i = 0; i < sizeof(hyper_names) / sizeof(hyper_names[0]); i++) {
+            size_t len = hyper_names[i].len;
+            if (len >= sizeof(decoded)) continue;
+            deobf_str_xor(decoded, hyper_names[i].obf, len, OBF_KEY);
+            decoded[len] = '\0';
+            if (strstr(line, decoded)) {
+                fclose(cpuinfo);
+                secure_memory_wipe(decoded, sizeof(decoded));
+                return 1;
+            }
         }
     }
     fclose(cpuinfo);
+    secure_memory_wipe(decoded, sizeof(decoded));
 
-    // Check for virtualization-specific files and directories
+    /* /proc paths kept in plaintext: these are generic kernel paths that
+     * appear in countless system binaries; encoding them buys little. */
     if (access("/proc/xen", F_OK) == 0) return 1;
     if (access("/sys/hypervisor/type", F_OK) == 0) return 1;
     if (access("/proc/vz", F_OK) == 0) return 1;
@@ -111,15 +181,17 @@ int detect_virtualization(void) {
 }
 
 int check_debug_environment(void) {
-    // Check suspicious environment variables
-    if (getenv("LD_PRELOAD")) return 1;
-    if (getenv("GDB")) return 1;
-    if (getenv("PTRACE_SCOPE")) return 1;
-    if (getenv("STRACE_LOG")) return 1;
-    if (getenv("LTRACE_LOG")) return 1;
-    if (getenv("RADARE2_LOG")) return 1;
-
-    return 0;
+    char decoded[16];
+    int found = 0;
+    for (size_t i = 0; i < sizeof(env_names) / sizeof(env_names[0]); i++) {
+        size_t len = env_names[i].len;
+        if (len >= sizeof(decoded)) continue;
+        deobf_str_xor(decoded, env_names[i].obf, len, OBF_KEY);
+        decoded[len] = '\0';
+        if (getenv(decoded)) { found = 1; break; }
+    }
+    secure_memory_wipe(decoded, sizeof(decoded));
+    return found;
 }
 
 int comprehensive_anti_debug_check() {

