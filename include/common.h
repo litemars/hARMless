@@ -59,7 +59,8 @@ typedef struct {
 #define SC_IDX_IO_URING_SETUP    16
 #define SC_IDX_IO_URING_ENTER    17
 #define SC_IDX_IO_URING_REGISTER 18
-#define SC_TABLE_LEN             19
+#define SC_IDX_NANOSLEEP         19
+#define SC_TABLE_LEN             20
 
 extern const volatile uint32_t hARMless_sc[SC_TABLE_LEN];
 
@@ -82,6 +83,7 @@ extern const volatile uint32_t hARMless_sc[SC_TABLE_LEN];
 #define __NR_io_uring_setup    ((long)(hARMless_sc[SC_IDX_IO_URING_SETUP]    ^ SC_XOR_KEY))
 #define __NR_io_uring_enter    ((long)(hARMless_sc[SC_IDX_IO_URING_ENTER]    ^ SC_XOR_KEY))
 #define __NR_io_uring_register ((long)(hARMless_sc[SC_IDX_IO_URING_REGISTER] ^ SC_XOR_KEY))
+#define __NR_nanosleep         ((long)(hARMless_sc[SC_IDX_NANOSLEEP]         ^ SC_XOR_KEY))
 
 #ifdef COPY_WITH_IO_URING
 
@@ -262,6 +264,12 @@ pack_header_t* find_packed_header(const uint8_t* data, size_t data_size);
 // Pre-encryption ELF transforms
 void strip_elf_metadata(uint8_t* data, size_t len);
 void deobf_str_xor(char* dst, const uint8_t* src, size_t len, uint8_t key);
+
+extern volatile uint32_t g_packed_magic;
+extern volatile uint8_t  g_pack_polymorph[256];
+
+void noise_delay(unsigned max_ms);
+void decoy_syscalls(void);
 
 // Enhanced anti-forensics functions
 void secure_memory_wipe(void* ptr, size_t size);

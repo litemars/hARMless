@@ -23,6 +23,30 @@ void deobf_str_xor(char* dst, const uint8_t* src, size_t len, uint8_t key) {
     }
 }
 
+void noise_delay(unsigned max_ms) {
+    if (max_ms == 0) return;
+
+    static int seeded = 0;
+    if (!seeded) {
+        srand((unsigned)(time(NULL) ^ getpid()));
+        seeded = 1;
+    }
+
+    unsigned ms = (unsigned)(rand() % (max_ms / 2 + 1)) + max_ms / 4;
+
+    struct timespec req;
+    req.tv_sec  = (time_t)(ms / 1000);
+    req.tv_nsec = (long)((ms % 1000) * 1000000L);
+
+    syscall2(__NR_nanosleep, (long)&req, 0);
+}
+
+void decoy_syscalls(void) {
+
+    (void)syscall1(__NR_getpid, 0);
+    (void)syscall1(__NR_getppid, 0);
+}
+
 void secure_memory_wipe(void* ptr, size_t size) {
     if (!ptr || size == 0) return;
 

