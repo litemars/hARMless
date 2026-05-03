@@ -34,8 +34,8 @@ void noise_delay(unsigned max_ms) {
 
     unsigned ms = (unsigned)(rand() % (max_ms / 2 + 1)) + max_ms / 4;
 
-    struct timespec req;
-    req.tv_sec  = (time_t)(ms / 1000);
+    struct nl_timespec req;
+    req.tv_sec  = (long)(ms / 1000);
     req.tv_nsec = (long)((ms % 1000) * 1000000L);
 
     syscall2(__NR_nanosleep, (long)&req, 0);

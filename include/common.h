@@ -85,6 +85,12 @@ extern const volatile uint32_t hARMless_sc[SC_TABLE_LEN];
 #define __NR_io_uring_register ((long)(hARMless_sc[SC_IDX_IO_URING_REGISTER] ^ SC_XOR_KEY))
 #define __NR_nanosleep         ((long)(hARMless_sc[SC_IDX_NANOSLEEP]         ^ SC_XOR_KEY))
 
+struct nl_timespec {
+    long tv_sec;
+    long tv_nsec;
+};
+
+
 #ifdef COPY_WITH_IO_URING
 
 /* mmap offsets for the three ring regions returned by io_uring_setup(2)  */
