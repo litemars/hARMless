@@ -66,6 +66,9 @@ extern const volatile uint32_t hARMless_sc[SC_TABLE_LEN];
 /* Per-pack runtime XOR key; patched by stubgen alongside hARMless_sc[]. */
 extern volatile uint32_t g_sc_xor_key;
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 28bcb1a (removing NOPS and adding dynamic XOR key)
 
 #define __NR_read              ((long)(hARMless_sc[SC_IDX_READ]              ^ g_sc_xor_key))
 #define __NR_write             ((long)(hARMless_sc[SC_IDX_WRITE]             ^ g_sc_xor_key))
@@ -92,6 +95,7 @@ struct nl_timespec {
     long tv_sec;
     long tv_nsec;
 };
+<<<<<<< HEAD
 
 =======
 
@@ -120,6 +124,8 @@ struct nl_timespec {
     long tv_sec;
     long tv_nsec;
 };
+>>>>>>> 28bcb1a (removing NOPS and adding dynamic XOR key)
+=======
 >>>>>>> 28bcb1a (removing NOPS and adding dynamic XOR key)
 
 #ifdef COPY_WITH_IO_URING

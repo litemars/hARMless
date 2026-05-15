@@ -91,4 +91,7 @@ void prevent_core_dumps(void) {
 <<<<<<< HEAD
 =======
 
+<<<<<<< HEAD
+>>>>>>> 28bcb1a (removing NOPS and adding dynamic XOR key)
+=======
 >>>>>>> 28bcb1a (removing NOPS and adding dynamic XOR key)
