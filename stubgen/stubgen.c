@@ -8,7 +8,7 @@
 #include "common.h"
 #include "elf64.h"
 
-#define POLYMORPH_PADDING_MAX 256
+#define POLYMORPH_PADDING_MAX 4096
 #define POLYMORPH_FILLER_LEN  256
 
 static int slurp_file(const char* path, uint8_t** out_buf, size_t* out_size) {
@@ -200,8 +200,13 @@ static int find_loader_symbol(const uint8_t* loader, size_t loader_size,
 void print_usage(const char* program_name) {
     printf("Usage: %s <loader_binary> <packed_data> <output_stub>\n", program_name);
     printf("\nCombines an unstripped loader with packed data and applies\n");
-    printf("per-pack polymorphic patches: random magic, random 256-byte\n");
-    printf("filler, random padding length, and section-header strip.\n");
+    printf("per-pack polymorphic patches:\n");
+    printf("  - random magic value and 256-byte .data filler\n");
+    printf("  - random padding (0-%d bytes) before payload\n", POLYMORPH_PADDING_MAX - 1);
+    printf("  - syscall-table re-keying (g_sc_xor_key + hARMless_sc)\n");
+    printf("  - string-block re-keying (g_str_xor_key + g_obf_str_block)\n");
+    printf("  - header body OTP blinding (g_pack_polymorph as one-time pad)\n");
+    printf("  - symbol scrub and section-header strip\n");
 }
 
 int main(int argc, char* argv[]) {
@@ -226,7 +231,7 @@ int main(int argc, char* argv[]) {
         goto cleanup;
     }
 
-    /* Locate patch points in the loader. */
+    /* Locate required patch points in the loader. */
     size_t magic_off = 0, magic_sz = 0;
     size_t poly_off  = 0, poly_sz  = 0;
     if (find_loader_symbol(loader_data, loader_size, "g_packed_magic",
@@ -244,17 +249,44 @@ int main(int argc, char* argv[]) {
         goto cleanup;
     }
 
+    /* Locate optional syscall-table re-keying symbols. */
+    size_t sc_key_off = 0, sc_key_sz = 0;
+    size_t sc_tab_off = 0, sc_tab_sz = 0;
+    int    has_sc_rekey = 0;
+    if (find_loader_symbol(loader_data, loader_size, "g_sc_xor_key",
+                           &sc_key_off, &sc_key_sz) == 0 &&
+        find_loader_symbol(loader_data, loader_size, "hARMless_sc",
+                           &sc_tab_off, &sc_tab_sz) == 0 &&
+        sc_key_sz == sizeof(uint32_t) &&
+        sc_tab_sz > 0 && (sc_tab_sz % sizeof(uint32_t)) == 0) {
+        has_sc_rekey = 1;
+    }
+
+    /* Locate optional string-block re-keying symbols. */
+    size_t str_key_off = 0, str_key_sz = 0;
+    size_t str_blk_off = 0, str_blk_sz = 0;
+    int    has_str_rekey = 0;
+    if (find_loader_symbol(loader_data, loader_size, "g_str_xor_key",
+                           &str_key_off, &str_key_sz) == 0 &&
+        find_loader_symbol(loader_data, loader_size, "g_obf_str_block",
+                           &str_blk_off, &str_blk_sz) == 0 &&
+        str_key_sz == sizeof(uint8_t) &&
+        str_blk_sz > 0) {
+        has_str_rekey = 1;
+    }
+
     /* Generate per-pack random material. */
-    uint32_t new_magic = 0;
+    uint32_t new_magic   = 0;
+    uint32_t new_xor_key = 0;
     uint8_t  new_filler[POLYMORPH_FILLER_LEN];
-    uint8_t  pad_byte = 0;
+    uint16_t pad_short   = 0;
     uint8_t  padding[POLYMORPH_PADDING_MAX];
 
     if (get_random_bytes((uint8_t*)&new_magic, sizeof(new_magic)) != 0) goto cleanup;
     if (get_random_bytes(new_filler, sizeof(new_filler)) != 0) goto cleanup;
-    if (get_random_bytes(&pad_byte, 1) != 0) goto cleanup;
+    if (get_random_bytes((uint8_t*)&pad_short, sizeof(pad_short)) != 0) goto cleanup;
     if (get_random_bytes(padding, sizeof(padding)) != 0) goto cleanup;
-    size_t pad_len = (size_t)pad_byte;  /* 0..255 */
+    size_t pad_len = (size_t)(pad_short & (POLYMORPH_PADDING_MAX - 1));  /* 0..4095 */
 
     /* Patch loader bytes in our local buffer (we own it; safe to mutate). */
     memcpy(loader_data + magic_off, &new_magic, sizeof(new_magic));
@@ -263,6 +295,40 @@ int main(int argc, char* argv[]) {
     /* Patch the packed header's magic field. pack_header_t.magic is the
      * very first field (offset 0), 4 bytes. */
     memcpy(packed_data + 0, &new_magic, sizeof(new_magic));
+
+    /* Blind the header body (bytes 4..sizeof-1) using the first
+     * (sizeof(pack_header_t)-4) bytes of new_filler as a per-pack OTP.
+     * new_filler has already been patched into g_pack_polymorph in the
+     * loader, so the loader can un-blind using g_pack_polymorph directly. */
+    {
+        size_t hdr_body = sizeof(pack_header_t) - sizeof(uint32_t);
+        for (size_t i = 0; i < hdr_body; i++)
+            packed_data[sizeof(uint32_t) + i] ^= new_filler[i];
+    }
+
+    if (has_sc_rekey) {
+        uint32_t old_xor_key = 0;
+        memcpy(&old_xor_key, loader_data + sc_key_off, sizeof(old_xor_key));
+        if (get_random_bytes((uint8_t*)&new_xor_key, sizeof(new_xor_key)) != 0)
+            goto cleanup;
+        size_t   n_sc   = sc_tab_sz / sizeof(uint32_t);
+        uint32_t* sc_tab = (uint32_t*)(loader_data + sc_tab_off);
+        for (size_t i = 0; i < n_sc; i++)
+            sc_tab[i] = (sc_tab[i] ^ old_xor_key) ^ new_xor_key;
+        memcpy(loader_data + sc_key_off, &new_xor_key, sizeof(new_xor_key));
+    }
+
+    uint8_t new_str_key = 0;
+    if (has_str_rekey) {
+        uint8_t old_str_key = loader_data[str_key_off];
+        if (get_random_bytes(&new_str_key, sizeof(new_str_key)) != 0)
+            goto cleanup;
+        if (new_str_key == 0) new_str_key = 0xA5;
+        uint8_t* blk = loader_data + str_blk_off;
+        for (size_t i = 0; i < str_blk_sz; i++)
+            blk[i] = (blk[i] ^ old_str_key) ^ new_str_key;
+        loader_data[str_key_off] = new_str_key;
+    }
 
 
     Elf64_Ehdr* ehdr = (Elf64_Ehdr*)loader_data;
@@ -301,11 +367,22 @@ int main(int argc, char* argv[]) {
 
     printf("Polymorphic stub generated: %s\n", output_file);
     printf("  Loader        : %zu bytes\n", loader_size);
-    printf("  Padding       : %zu bytes\n", pad_len);
+    printf("  Padding       : %zu bytes (0-%d range)\n", pad_len, POLYMORPH_PADDING_MAX - 1);
     printf("  Packed payload: %zu bytes\n", packed_size);
     printf("  Total         : %zu bytes\n", loader_size + pad_len + packed_size);
     printf("  New magic     : 0x%08X\n", new_magic);
     printf("  Polymorph     : %d bytes randomized in .data\n", POLYMORPH_FILLER_LEN);
+    if (has_sc_rekey)
+        printf("  SC XOR key    : 0x%08X (re-keyed)\n", new_xor_key);
+    else
+        printf("  SC XOR key    : (symbols absent, skipped)\n");
+    if (has_str_rekey)
+        printf("  Str XOR key   : 0x%02X (re-keyed, %zu bytes)\n",
+               (unsigned)new_str_key, str_blk_sz);
+    else
+        printf("  Str XOR key   : (symbols absent, skipped)\n");
+    printf("  Header blind  : OTP from g_pack_polymorph[0..%zu]\n",
+           sizeof(pack_header_t) - sizeof(uint32_t) - 1);
 
     ret = 0;
     goto cleanup;

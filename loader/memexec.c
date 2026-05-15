@@ -8,22 +8,6 @@
 #include <errno.h>
 #include "common.h"
 
-/* int sys_memfd_create(const char* name, unsigned int flags) {
-    return syscall2(__NR_memfd_create, (long)name, flags);
-}
-
-int sys_ftruncate(int fd, off_t length) {
-    return syscall2(__NR_ftruncate, fd, length);
-}
-
-ssize_t sys_write(int fd, const void* buf, size_t count) {
-    return syscall3(__NR_write, fd, (long)buf, count);
-}
-
-int sys_execve(const char* filename, char* const argv[], char* const envp[]) {
-    return syscall3(__NR_execve, (long)filename, (long)argv, (long)envp);
-} */
-
 #ifdef COPY_WITH_IO_URING
 
 static int write_via_io_uring(int memfd, const uint8_t *elf_data, size_t elf_size)

@@ -1,7 +1,5 @@
 #include "common.h"
 
-
-
 volatile uint32_t g_packed_magic = PACKED_MAGIC;
 
 __attribute__((used))
