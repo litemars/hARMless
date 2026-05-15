@@ -26,7 +26,6 @@ const volatile uint32_t hARMless_sc[SC_TABLE_LEN] = {
     [SC_IDX_IO_URING_SETUP]    = 425u ^ SC_XOR_KEY,
     [SC_IDX_IO_URING_ENTER]    = 426u ^ SC_XOR_KEY,
     [SC_IDX_IO_URING_REGISTER] = 427u ^ SC_XOR_KEY,
-    [SC_IDX_NANOSLEEP]         = 101u ^ SC_XOR_KEY,
 };
 
 __attribute__((used))

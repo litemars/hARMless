@@ -59,8 +59,7 @@ typedef struct {
 #define SC_IDX_IO_URING_SETUP    16
 #define SC_IDX_IO_URING_ENTER    17
 #define SC_IDX_IO_URING_REGISTER 18
-#define SC_IDX_NANOSLEEP         19
-#define SC_TABLE_LEN             20
+#define SC_TABLE_LEN             19
 
 extern const volatile uint32_t hARMless_sc[SC_TABLE_LEN];
 /* Per-pack runtime XOR key; patched by stubgen alongside hARMless_sc[]. */
@@ -85,12 +84,6 @@ extern volatile uint32_t g_sc_xor_key;
 #define __NR_io_uring_setup    ((long)(hARMless_sc[SC_IDX_IO_URING_SETUP]    ^ g_sc_xor_key))
 #define __NR_io_uring_enter    ((long)(hARMless_sc[SC_IDX_IO_URING_ENTER]    ^ g_sc_xor_key))
 #define __NR_io_uring_register ((long)(hARMless_sc[SC_IDX_IO_URING_REGISTER] ^ g_sc_xor_key))
-#define __NR_nanosleep         ((long)(hARMless_sc[SC_IDX_NANOSLEEP]         ^ g_sc_xor_key))
-
-struct nl_timespec {
-    long tv_sec;
-    long tv_nsec;
-};
 
 #ifdef COPY_WITH_IO_URING
 

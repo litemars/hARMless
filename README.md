@@ -209,7 +209,7 @@ CRC32 checksums detect any tampering with:
 - **Obfuscated control flow**: Reduces reverse engineering surface
 - **Obfuscated syscall numbers**: Stored XOR'd with `0xDEADBEEF`, decoded at each call site
 - **Direct syscalls**: Evades LD_PRELOAD and EDR hooks
-- **Noise delays**: Random `nanosleep` calls defeat dynamic timing analysis
+- **Noise delays**: CPU-bound xorshift loops seeded from the ASLR stack address; cannot be skipped by sandbox time-acceleration and emit no recognizable timing syscall
 - **Process context probes**: `getpid`, `getppid`, and `prctl(PR_GET_NAME)` woven between critical operations; results used in a runtime condition to avoid trivial dead-code elimination by an analyst
 - **In-memory execution**: No `/tmp` artifacts
 
