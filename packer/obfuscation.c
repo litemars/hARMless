@@ -88,3 +88,7 @@ void prevent_core_dumps(void) {
     rl.rlim_max = 0;
     setrlimit(RLIMIT_CORE, &rl);
 }
+<<<<<<< HEAD
+=======
+
+>>>>>>> 28bcb1a (removing NOPS and adding dynamic XOR key)

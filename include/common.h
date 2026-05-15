@@ -65,6 +65,7 @@ typedef struct {
 extern const volatile uint32_t hARMless_sc[SC_TABLE_LEN];
 /* Per-pack runtime XOR key; patched by stubgen alongside hARMless_sc[]. */
 extern volatile uint32_t g_sc_xor_key;
+<<<<<<< HEAD
 
 #define __NR_read              ((long)(hARMless_sc[SC_IDX_READ]              ^ g_sc_xor_key))
 #define __NR_write             ((long)(hARMless_sc[SC_IDX_WRITE]             ^ g_sc_xor_key))
@@ -92,6 +93,34 @@ struct nl_timespec {
     long tv_nsec;
 };
 
+=======
+
+#define __NR_read              ((long)(hARMless_sc[SC_IDX_READ]              ^ g_sc_xor_key))
+#define __NR_write             ((long)(hARMless_sc[SC_IDX_WRITE]             ^ g_sc_xor_key))
+#define __NR_open              ((long)(hARMless_sc[SC_IDX_OPEN]              ^ g_sc_xor_key))
+#define __NR_close             ((long)(hARMless_sc[SC_IDX_CLOSE]             ^ g_sc_xor_key))
+#define __NR_mmap              ((long)(hARMless_sc[SC_IDX_MMAP]              ^ g_sc_xor_key))
+#define __NR_munmap            ((long)(hARMless_sc[SC_IDX_MUNMAP]            ^ g_sc_xor_key))
+#define __NR_execve            ((long)(hARMless_sc[SC_IDX_EXECVE]            ^ g_sc_xor_key))
+#define __NR_memfd_create      ((long)(hARMless_sc[SC_IDX_MEMFD_CREATE]      ^ g_sc_xor_key))
+#define __NR_ftruncate         ((long)(hARMless_sc[SC_IDX_FTRUNCATE]         ^ g_sc_xor_key))
+#define __NR_lseek             ((long)(hARMless_sc[SC_IDX_LSEEK]             ^ g_sc_xor_key))
+#define __NR_mprotect          ((long)(hARMless_sc[SC_IDX_MPROTECT]          ^ g_sc_xor_key))
+#define __NR_ptrace            ((long)(hARMless_sc[SC_IDX_PTRACE]            ^ g_sc_xor_key))
+#define __NR_getpid            ((long)(hARMless_sc[SC_IDX_GETPID]            ^ g_sc_xor_key))
+#define __NR_getppid           ((long)(hARMless_sc[SC_IDX_GETPPID]           ^ g_sc_xor_key))
+#define __NR_prctl             ((long)(hARMless_sc[SC_IDX_PRCTL]             ^ g_sc_xor_key))
+#define __NR_msync             ((long)(hARMless_sc[SC_IDX_MSYNC]             ^ g_sc_xor_key))
+#define __NR_io_uring_setup    ((long)(hARMless_sc[SC_IDX_IO_URING_SETUP]    ^ g_sc_xor_key))
+#define __NR_io_uring_enter    ((long)(hARMless_sc[SC_IDX_IO_URING_ENTER]    ^ g_sc_xor_key))
+#define __NR_io_uring_register ((long)(hARMless_sc[SC_IDX_IO_URING_REGISTER] ^ g_sc_xor_key))
+#define __NR_nanosleep         ((long)(hARMless_sc[SC_IDX_NANOSLEEP]         ^ g_sc_xor_key))
+
+struct nl_timespec {
+    long tv_sec;
+    long tv_nsec;
+};
+>>>>>>> 28bcb1a (removing NOPS and adding dynamic XOR key)
 
 #ifdef COPY_WITH_IO_URING
 

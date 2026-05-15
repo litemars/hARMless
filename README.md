@@ -210,7 +210,11 @@ CRC32 checksums detect any tampering with:
 - **Obfuscated syscall numbers**: Stored XOR'd with `0xDEADBEEF`, decoded at each call site
 - **Direct syscalls**: Evades LD_PRELOAD and EDR hooks
 - **Noise delays**: Random `nanosleep` calls defeat dynamic timing analysis
+<<<<<<< HEAD
 - **Process context probes**: `getpid`, `getppid`, and `prctl(PR_GET_NAME)` woven between critical operations; results used in a runtime condition to avoid trivial dead-code elimination by an analyst
+=======
+- **Decoy syscalls**: Spurious `getpid`/`getppid` calls pollute syscall traces
+>>>>>>> 28bcb1a (removing NOPS and adding dynamic XOR key)
 - **In-memory execution**: No `/tmp` artifacts
 
 ---
