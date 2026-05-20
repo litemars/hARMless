@@ -13,18 +13,18 @@ A comprehensive security research tool that encrypts ARM64 ELF executables using
 
 ---
 
-## ✨ Features
+## Features
 
-- **🎯 ARM64 ELF Support**: Specifically designed for AArch64 Linux binaries
-- **🔐 Multi-Layer Encryption**: Triple encryption using AES-256, ChaCha20, and RC4
-- **💾 Memory Execution**: Runtime decryption and execution entirely in memory using `memfd_create`
-- **🔒 Code Obfuscation**: Advanced obfuscation techniques for anti-analysis
-- **✅ CRC32 Verification**: Integrity checking to detect tampering
-- **📦 Self-Contained**: Packed binaries are completely standalone
-- **🛡️ Core Dump Prevention**: Prevents memory dumps using `setrlimit`
-- **🧹 Secure Memory Wiping**: Multi-pass memory erasure for sensitive data
-- **🔧 Direct Syscalls**: Bypasses userland hooks for enhanced stealth
-- **🧬 Polymorphic Loader**: Every packed binary is bytewise unique — randomized magic, filler, padding, and symbol table scrubbing at stub-generation time
+- **ARM64 ELF Support**: Specifically designed for AArch64 Linux binaries
+- **Multi-Layer Encryption**: Triple encryption using AES-256, ChaCha20, and RC4
+- **Memory Execution**: Runtime decryption and execution entirely in memory using `memfd_create`
+- **Code Obfuscation**: Advanced obfuscation techniques for anti-analysis
+- **CRC32 Verification**: Integrity checking to detect tampering
+- **Self-Contained**: Packed binaries are completely standalone
+- **Core Dump Prevention**: Prevents memory dumps using `setrlimit`
+- **Secure Memory Wiping**: Multi-pass memory erasure for sensitive data
+- **Direct Syscalls**: Bypasses userland hooks for enhanced stealth
+- **Polymorphic Loader**: Every packed binary is bytewise unique — randomized magic, filler, padding, and symbol table scrubbing at stub-generation time
 
 ---
 
@@ -126,7 +126,7 @@ make test
 
 ---
 
-## 🔬 Technical Details
+## Technical Details
 
 ### Encryption Pipeline
 
@@ -186,7 +186,7 @@ All anti-debug and process-masquerade strings (tool names, hypervisor signatures
 
 ---
 
-## 🛡️ Security Features
+## Security Features
 
 ### Core Dump Prevention
 
@@ -215,7 +215,7 @@ CRC32 checksums detect any tampering with:
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
