@@ -13,31 +13,18 @@ A comprehensive security research tool that encrypts ARM64 ELF executables using
 
 ---
 
-## 📋 Table of Contents
+## Features
 
-- [Features](#-features)
-- [Quick Start](#-quick-start)
-- [Installation](#-installation)
-- [Usage](#-usage)
-- [Technical Details](#-technical-details)
-- [Security Features](#-security-features)
-- [Architecture](#-architecture)
-- [Contributing](#-contributing)
-- [License](#-license)
-
----
-
-## ✨ Features
-
-- **🎯 ARM64 ELF Support**: Specifically designed for AArch64 Linux binaries
-- **🔐 Multi-Layer Encryption**: Triple encryption using AES-256, ChaCha20, and RC4
-- **💾 Memory Execution**: Runtime decryption and execution entirely in memory using `memfd_create`
-- **🔒 Code Obfuscation**: Advanced obfuscation techniques for anti-analysis
-- **✅ CRC32 Verification**: Integrity checking to detect tampering
-- **📦 Self-Contained**: Packed binaries are completely standalone
-- **🛡️ Core Dump Prevention**: Prevents memory dumps using `setrlimit`
-- **🧹 Secure Memory Wiping**: Multi-pass memory erasure for sensitive data
-- **🔧 Direct Syscalls**: Bypasses userland hooks for enhanced stealth
+- **ARM64 ELF Support**: Specifically designed for AArch64 Linux binaries
+- **Multi-Layer Encryption**: Triple encryption using AES-256, ChaCha20, and RC4
+- **Memory Execution**: Runtime decryption and execution entirely in memory using `memfd_create`
+- **Code Obfuscation**: Advanced obfuscation techniques for anti-analysis
+- **CRC32 Verification**: Integrity checking to detect tampering
+- **Self-Contained**: Packed binaries are completely standalone
+- **Core Dump Prevention**: Prevents memory dumps using `setrlimit`
+- **Secure Memory Wiping**: Multi-pass memory erasure for sensitive data
+- **Direct Syscalls**: Bypasses userland hooks for enhanced stealth
+- **Polymorphic Loader**: Every packed binary is bytewise unique — randomized magic, filler, padding, and symbol table scrubbing at stub-generation time
 
 ---
 
@@ -67,6 +54,7 @@ make pack INPUT=/bin/ls OUTPUT=packed_ls
 - **ARM64/AArch64 Linux system** or cross-compilation toolchain
 - **GCC** for ARM64 (`aarch64-linux-gnu-gcc` or native)
 - **Make**
+- **OpenSSL** (`libssl-dev`) — required for AES-256 and ChaCha20 via the EVP API
 - **Standard development tools** (`git`, `build-essential`)
 
 ### Build Steps
@@ -88,8 +76,8 @@ make all
 ### Cross-Compilation (x86_64 → ARM64)
 
 ```bash
-# Install ARM64 cross-compiler
-sudo apt-get install gcc-aarch64-linux-gnu
+# Install ARM64 cross-compiler and OpenSSL
+sudo apt-get install gcc-aarch64-linux-gnu libssl-dev
 
 # Build with cross-compiler
 make CC=aarch64-linux-gnu-gcc all
@@ -117,10 +105,13 @@ make pack INPUT=your_arm64_binary OUTPUT=packed_binary
 ./packed_binary
 
 # The packed binary will:
-# 1. Read its own embedded encrypted data
-# 2. Decrypt the original ELF in memory
-# 3. Verify integrity with CRC32
-# 4. Execute directly from memory using memfd_create
+# 1. Run anti-debug and anti-sandbox checks
+# 2. Read its own embedded encrypted data
+# 3. Decrypt the original ELF in memory
+# 4. Verify integrity with CRC32
+# 5. Create a masqueraded memfd and write the ELF into it
+# 6. Delete itself from disk (unlink)
+# 7. Execute directly from memory via /proc/self/fd/<memfd>
 ```
 
 ### Test
@@ -135,51 +126,67 @@ make test
 
 ---
 
-## 🔬 Technical Details
+## Technical Details
 
 ### Encryption Pipeline
 
 The packer uses a **triple-layer encryption** approach:
 
-1. **RC4 Stream Cipher**: Initial obfuscation layer
-2. **AES-256-CTR**: Industry-standard symmetric encryption
-3. **ChaCha20**: Modern stream cipher for additional security
+1. **AES-256-ECB**: First encryption pass (OpenSSL EVP)
+2. **ChaCha20**: Modern stream cipher for additional security (OpenSSL EVP)
+3. **RC4 Stream Cipher**: Final obfuscation layer
 
 ```
-Original Binary → RC4 → AES-256 → ChaCha20 → Packed Data
+Original Binary → AES-256 → ChaCha20 → RC4 → Packed Data
 ```
 
 **Key Generation**: Cryptographically secure random keys from `/dev/urandom` (256 bits per layer)
 
-### ARM64 Direct Syscalls
 
-The loader uses direct syscalls to bypass userland hooks:
+### In-Memory Write Paths
 
-| Syscall | Number | Purpose |
-|---------|--------|---------|
-| `memfd_create` | 279 | Create anonymous file descriptor |
-| `execve` | 221 | Execute decrypted binary |
-| `mmap` | 222 | Memory mapping |
-| `write` | 64 | Output operations |
-| `fexecve` | 281 | Execute from file descriptor |
+Three selectable methods for writing the decrypted ELF into the memfd (chosen at compile time):
 
-**Syscall Convention (ARM64)**:
-```c
-// x8 = syscall number
-// x0-x5 = arguments
-// svc #0 = invoke
-```
+| Method | Flag | Kernel Requirement |
+|--------|------|--------------------|
+| `io_uring` (default) | `-DCOPY_WITH_IO_URING` | ≥ 5.1 |
+| `mmap` | `-DCOPY_WITH_MMAP` | Any |
+| `write(2)` | (neither flag) | Any |
+
+### Polymorphic Engine
+
+Every invocation of `stubgen` produces a bytewise-unique packed binary, even when packing the same input:
+
+| Mutation | Mechanism |
+|----------|-----------|
+| Random magic | 32-bit `g_packed_magic` patched to a fresh value from `/dev/urandom`; packed header is synchronized |
+| Random filler | 256-byte `g_pack_polymorph` array in `.data` overwritten with random bytes |
+| Random padding | 0–4095 bytes of random junk inserted between loader stub and payload |
+| SC table re-keying | `hARMless_sc[]` re-encoded with a fresh random `g_sc_xor_key` so syscall numbers differ in every binary |
+| String block re-keying | All 241 obfuscated string bytes in `g_obf_str_block` re-encoded with a fresh random `g_str_xor_key` |
+| Header OTP blinding | Pack header body (140 bytes) XOR'd with the first 140 bytes of `g_pack_polymorph` as a one-time pad |
+| Symbol scrub | `.symtab`/`.strtab` sections overwritten with random data; ELF section header fields zeroed |
+
+The result: no two packed outputs share the same byte pattern, defeating static hash-based signatures.
+
+### XOR-Obfuscated Syscall Table
+
+Syscall numbers are stored in a `volatile` array (`hARMless_sc[]`) XOR-encoded with the key `0xDEADBEEF` at compile time. At stub-generation time, `stubgen` re-encodes the entire table with a fresh random key written into `g_sc_xor_key`, so syscall numbers differ in every packed binary. They are decoded inline at each call site via `hARMless_sc[i] ^ g_sc_xor_key`, preventing static analysis tools from recovering syscall identifiers.
+
+### XOR-Obfuscated String Block
+
+All anti-debug and process-masquerade strings (tool names, hypervisor signatures, env var names, process titles) are stored in a single contiguous `g_obf_str_block[]` array, XOR-encoded with `g_str_xor_key`. At stub-generation time, `stubgen` re-encodes the entire block with a fresh random byte key, making every binary's string patterns unique and independent of one another.
 
 ### Memory Safety
 
-- **Secure Wiping**: 3-pass overwrite (zeros, ones, random)
+- **Secure Wiping**: 3-pass overwrite (zeros, ones, random) with volatile access to prevent compiler optimization
 - **No Disk Writes**: Original binary never touches filesystem
-- **Stack Protection**: Non-executable stack
-- **ASLR Compatible**: Position-independent code
+- **Self-Deletion**: Loader calls `unlink()` on itself before executing the payload
+- **ASLR Compatible**: Position-independent code; random address slot reserved via `mmap(NULL)` before execution
 
 ---
 
-## 🛡️ Security Features
+## Security Features
 
 ### Core Dump Prevention
 
@@ -198,18 +205,21 @@ CRC32 checksums detect any tampering with:
 
 ### Anti-Analysis
 
-- **No debug symbols**: Stripped binaries
+- **No debug symbols**: Stripped binaries; section header table zeroed at stub-generation time
 - **Obfuscated control flow**: Reduces reverse engineering surface
+- **Obfuscated syscall numbers**: Stored XOR'd with `0xDEADBEEF`, decoded at each call site
 - **Direct syscalls**: Evades LD_PRELOAD and EDR hooks
+- **Noise delays**: CPU-bound xorshift loops seeded from the ASLR stack address; cannot be skipped by sandbox time-acceleration and emit no recognizable timing syscall
+- **Process context probes**: `getpid`, `getppid`, and `prctl(PR_GET_NAME)` woven between critical operations; results used in a runtime condition to avoid trivial dead-code elimination by an analyst
 - **In-memory execution**: No `/tmp` artifacts
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    Original Binary                       │
+│                    Original Binary                      │
 └────────────────────┬────────────────────────────────────┘
                      │
                      ▼
@@ -231,24 +241,27 @@ CRC32 checksums detect any tampering with:
          ┌───────────────────────┐
          │ Stub Generator        │
          │ (stubgen.c)           │
-         │  - Embed loader       │
-         │  - Append data        │
+         │  - Patch magic/filler │
+         │  - Scrub symbols      │
+         │  - Insert padding     │
+         │  - Append payload     │
          └───────────┬───────────┘
                      │
                      ▼
 ┌────────────────────────────────────────────────────────┐
-│              Packed Binary (Output)                     │
-│  ┌──────────────────────────────────────────────┐     │
-│  │ Loader Stub (loader.c)                       │     │
-│  │  - Read embedded data                        │     │
-│  │  - Decrypt (ChaCha20 → AES → RC4)           │     │
-│  │  - Verify CRC32                              │     │
-│  │  - Create memfd                              │     │
-│  │  - Execute via fexecve                       │     │
-│  └──────────────────────────────────────────────┘     │
-│  ┌──────────────────────────────────────────────┐     │
-│  │ Encrypted Payload + Metadata                 │     │
-│  └──────────────────────────────────────────────┘     │
+│              Packed Binary (Output)                    │
+│  ┌──────────────────────────────────────────────┐      │
+│  │ Loader Stub (loader.c)                       │      │
+│  │  - Anti-debug / anti-sandbox checks          │      │
+│  │  - Decrypt (RC4 → ChaCha20 → AES-256)        │      │
+│  │  - Verify CRC32                              │      │
+│  │  - Create masqueraded memfd                  │      │
+│  │  - Unlink self                               │      │
+│  │  - Execute via /proc/self/fd/<N>             │      │
+│  └──────────────────────────────────────────────┘      │
+│  ┌──────────────────────────────────────────────┐      │
+│  │ [random padding] Encrypted Payload + Header  │      │
+│  └──────────────────────────────────────────────┘      │
 └────────────────────────────────────────────────────────┘
                      │
                      ▼

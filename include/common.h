@@ -62,26 +62,28 @@ typedef struct {
 #define SC_TABLE_LEN             19
 
 extern const volatile uint32_t hARMless_sc[SC_TABLE_LEN];
+/* Per-pack runtime XOR key; patched by stubgen alongside hARMless_sc[]. */
+extern volatile uint32_t g_sc_xor_key;
 
-#define __NR_read              ((long)(hARMless_sc[SC_IDX_READ]              ^ SC_XOR_KEY))
-#define __NR_write             ((long)(hARMless_sc[SC_IDX_WRITE]             ^ SC_XOR_KEY))
-#define __NR_open              ((long)(hARMless_sc[SC_IDX_OPEN]              ^ SC_XOR_KEY))
-#define __NR_close             ((long)(hARMless_sc[SC_IDX_CLOSE]             ^ SC_XOR_KEY))
-#define __NR_mmap              ((long)(hARMless_sc[SC_IDX_MMAP]              ^ SC_XOR_KEY))
-#define __NR_munmap            ((long)(hARMless_sc[SC_IDX_MUNMAP]            ^ SC_XOR_KEY))
-#define __NR_execve            ((long)(hARMless_sc[SC_IDX_EXECVE]            ^ SC_XOR_KEY))
-#define __NR_memfd_create      ((long)(hARMless_sc[SC_IDX_MEMFD_CREATE]      ^ SC_XOR_KEY))
-#define __NR_ftruncate         ((long)(hARMless_sc[SC_IDX_FTRUNCATE]         ^ SC_XOR_KEY))
-#define __NR_lseek             ((long)(hARMless_sc[SC_IDX_LSEEK]             ^ SC_XOR_KEY))
-#define __NR_mprotect          ((long)(hARMless_sc[SC_IDX_MPROTECT]          ^ SC_XOR_KEY))
-#define __NR_ptrace            ((long)(hARMless_sc[SC_IDX_PTRACE]            ^ SC_XOR_KEY))
-#define __NR_getpid            ((long)(hARMless_sc[SC_IDX_GETPID]            ^ SC_XOR_KEY))
-#define __NR_getppid           ((long)(hARMless_sc[SC_IDX_GETPPID]           ^ SC_XOR_KEY))
-#define __NR_prctl             ((long)(hARMless_sc[SC_IDX_PRCTL]             ^ SC_XOR_KEY))
-#define __NR_msync             ((long)(hARMless_sc[SC_IDX_MSYNC]             ^ SC_XOR_KEY))
-#define __NR_io_uring_setup    ((long)(hARMless_sc[SC_IDX_IO_URING_SETUP]    ^ SC_XOR_KEY))
-#define __NR_io_uring_enter    ((long)(hARMless_sc[SC_IDX_IO_URING_ENTER]    ^ SC_XOR_KEY))
-#define __NR_io_uring_register ((long)(hARMless_sc[SC_IDX_IO_URING_REGISTER] ^ SC_XOR_KEY))
+#define __NR_read              ((long)(hARMless_sc[SC_IDX_READ]              ^ g_sc_xor_key))
+#define __NR_write             ((long)(hARMless_sc[SC_IDX_WRITE]             ^ g_sc_xor_key))
+#define __NR_open              ((long)(hARMless_sc[SC_IDX_OPEN]              ^ g_sc_xor_key))
+#define __NR_close             ((long)(hARMless_sc[SC_IDX_CLOSE]             ^ g_sc_xor_key))
+#define __NR_mmap              ((long)(hARMless_sc[SC_IDX_MMAP]              ^ g_sc_xor_key))
+#define __NR_munmap            ((long)(hARMless_sc[SC_IDX_MUNMAP]            ^ g_sc_xor_key))
+#define __NR_execve            ((long)(hARMless_sc[SC_IDX_EXECVE]            ^ g_sc_xor_key))
+#define __NR_memfd_create      ((long)(hARMless_sc[SC_IDX_MEMFD_CREATE]      ^ g_sc_xor_key))
+#define __NR_ftruncate         ((long)(hARMless_sc[SC_IDX_FTRUNCATE]         ^ g_sc_xor_key))
+#define __NR_lseek             ((long)(hARMless_sc[SC_IDX_LSEEK]             ^ g_sc_xor_key))
+#define __NR_mprotect          ((long)(hARMless_sc[SC_IDX_MPROTECT]          ^ g_sc_xor_key))
+#define __NR_ptrace            ((long)(hARMless_sc[SC_IDX_PTRACE]            ^ g_sc_xor_key))
+#define __NR_getpid            ((long)(hARMless_sc[SC_IDX_GETPID]            ^ g_sc_xor_key))
+#define __NR_getppid           ((long)(hARMless_sc[SC_IDX_GETPPID]           ^ g_sc_xor_key))
+#define __NR_prctl             ((long)(hARMless_sc[SC_IDX_PRCTL]             ^ g_sc_xor_key))
+#define __NR_msync             ((long)(hARMless_sc[SC_IDX_MSYNC]             ^ g_sc_xor_key))
+#define __NR_io_uring_setup    ((long)(hARMless_sc[SC_IDX_IO_URING_SETUP]    ^ g_sc_xor_key))
+#define __NR_io_uring_enter    ((long)(hARMless_sc[SC_IDX_IO_URING_ENTER]    ^ g_sc_xor_key))
+#define __NR_io_uring_register ((long)(hARMless_sc[SC_IDX_IO_URING_REGISTER] ^ g_sc_xor_key))
 
 #ifdef COPY_WITH_IO_URING
 
@@ -262,6 +264,73 @@ pack_header_t* find_packed_header(const uint8_t* data, size_t data_size);
 // Pre-encryption ELF transforms
 void strip_elf_metadata(uint8_t* data, size_t len);
 void deobf_str_xor(char* dst, const uint8_t* src, size_t len, uint8_t key);
+
+extern volatile uint32_t g_packed_magic;
+extern volatile uint8_t  g_pack_polymorph[256];
+
+extern volatile uint8_t  g_str_xor_key;
+extern volatile uint8_t  g_obf_str_block[];
+
+/* Offsets and lengths into g_obf_str_block */
+#define STR_OFF_GDB          0
+#define STR_LEN_GDB          3
+#define STR_OFF_STRACE       3
+#define STR_LEN_STRACE       6
+#define STR_OFF_LTRACE       9
+#define STR_LEN_LTRACE       6
+#define STR_OFF_RADARE2      15
+#define STR_LEN_RADARE2      7
+#define STR_OFF_OBJDUMP      22
+#define STR_LEN_OBJDUMP      7
+#define STR_OFF_HEXDUMP      29
+#define STR_LEN_HEXDUMP      7
+#define STR_OFF_GHIDRA       36
+#define STR_LEN_GHIDRA       6
+#define STR_OFF_HYPERVISOR   42
+#define STR_LEN_HYPERVISOR   10
+#define STR_OFF_QEMU         52
+#define STR_LEN_QEMU         4
+#define STR_OFF_KVM          56
+#define STR_LEN_KVM          3
+#define STR_OFF_XEN          59
+#define STR_LEN_XEN          3
+#define STR_OFF_VMWARE       62
+#define STR_LEN_VMWARE       6
+#define STR_OFF_VIRTUALBOX   68
+#define STR_LEN_VIRTUALBOX   10
+#define STR_OFF_LD_PRELOAD   78
+#define STR_LEN_LD_PRELOAD   10
+#define STR_OFF_GDB_ENV      88
+#define STR_LEN_GDB_ENV      3
+#define STR_OFF_PTRACE_SCOPE 91
+#define STR_LEN_PTRACE_SCOPE 12
+#define STR_OFF_STRACE_LOG   103
+#define STR_LEN_STRACE_LOG   10
+#define STR_OFF_LTRACE_LOG   113
+#define STR_LEN_LTRACE_LOG   10
+#define STR_OFF_RADARE2_LOG  123
+#define STR_LEN_RADARE2_LOG  11
+#define STR_OFF_TRACERPID    134
+#define STR_LEN_TRACERPID    10
+#define STR_OFF_KWORKER      144
+#define STR_LEN_KWORKER      13
+#define STR_OFF_KSOFTIRQD    157
+#define STR_LEN_KSOFTIRQD    13
+#define STR_OFF_MIGRATION    170
+#define STR_LEN_MIGRATION    13
+#define STR_OFF_RCUGP        183
+#define STR_LEN_RCUGP        8
+#define STR_OFF_WATCHDOG     191
+#define STR_LEN_WATCHDOG     12
+#define STR_OFF_KCOMPACTD    203
+#define STR_LEN_KCOMPACTD    12
+#define STR_OFF_KSWAPD       215
+#define STR_LEN_KSWAPD       9
+#define STR_OFF_JOURNAL      224
+#define STR_LEN_JOURNAL      17
+
+void noise_delay(unsigned max_ms);
+void check_exec_context(void);
 
 // Enhanced anti-forensics functions
 void secure_memory_wipe(void* ptr, size_t size);

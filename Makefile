@@ -20,7 +20,7 @@ OPENSSL_LDFLAGS := $(shell pkg-config --libs openssl 2>/dev/null || echo "-lssl 
 
 # Security flags
 SECURITY_FLAGS := -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE
-STEALTH_FLAGS := -fomit-frame-pointer -s -fno-asynchronous-unwind-tables -fno-stack-protector
+STEALTH_FLAGS := -fomit-frame-pointer -fno-asynchronous-unwind-tables -fno-stack-protector
 
 # Directories
 INCLUDE_DIR := include
@@ -36,8 +36,9 @@ STUBGEN_BIN := $(BUILD_DIR)/stubgen
 
 # Enhanced source files (including obfuscation)
 PACKER_SOURCES := $(PACKER_DIR)/packer.c $(PACKER_DIR)/crypto.c $(PACKER_DIR)/obfuscation.c
-LOADER_SOURCES := $(LOADER_DIR)/loader.c $(LOADER_DIR)/memexec.c $(PACKER_DIR)/elf64.c $(PACKER_DIR)/crypto.c $(PACKER_DIR)/obfuscation.c
-STUBGEN_SOURCES := $(STUBGEN_DIR)/stubgen.c
+LOADER_SOURCES := $(LOADER_DIR)/loader.c $(LOADER_DIR)/memexec.c $(LOADER_DIR)/polymorph.c $(LOADER_DIR)/strings.c $(PACKER_DIR)/elf64.c $(PACKER_DIR)/crypto.c $(PACKER_DIR)/obfuscation.c
+# stubgen now parses the loader ELF to locate symbols and shares is_elf64
+STUBGEN_SOURCES := $(STUBGEN_DIR)/stubgen.c $(PACKER_DIR)/elf64.c
 
 # Include paths
 INCLUDES := -I$(INCLUDE_DIR)

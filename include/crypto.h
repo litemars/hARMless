@@ -23,7 +23,4 @@ void aes256_decrypt(uint8_t* data, size_t len, const uint8_t* key);
 void chacha20_encrypt(uint8_t* data, size_t len, const uint8_t* key, const uint8_t* nonce);
 void chacha20_decrypt(uint8_t* data, size_t len, const uint8_t* key, const uint8_t* nonce);
 
-// Utility functions
-void secure_random_bytes(uint8_t* buffer, size_t size);
-
 #endif

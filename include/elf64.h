@@ -97,6 +97,23 @@ typedef struct {
     Elf64_Xword sh_entsize;
 } Elf64_Shdr;
 
+// Section types (subset needed by stubgen for symbol lookup)
+#define SHT_NULL     0
+#define SHT_PROGBITS 1
+#define SHT_SYMTAB   2
+#define SHT_STRTAB   3
+#define SHT_NOBITS   8
+
+// ELF64 symbol table entry
+typedef struct {
+    Elf64_Word    st_name;   // index into associated string table
+    unsigned char st_info;
+    unsigned char st_other;
+    Elf64_Half    st_shndx;  // section header index for the symbol's value
+    Elf64_Addr    st_value;  // virtual address of the symbol
+    Elf64_Xword   st_size;
+} Elf64_Sym;
+
 int is_elf64(const void* data);
 int is_elf64_arm64(const void* data);
 void print_elf64_header(const Elf64_Ehdr* ehdr);

@@ -18,7 +18,7 @@ const volatile uint32_t hARMless_sc[SC_TABLE_LEN] = {
     [SC_IDX_FTRUNCATE]         =  46u ^ SC_XOR_KEY,
     [SC_IDX_LSEEK]             =  62u ^ SC_XOR_KEY,
     [SC_IDX_MPROTECT]          = 226u ^ SC_XOR_KEY,
-    [SC_IDX_PTRACE]            = 101u ^ SC_XOR_KEY,
+    [SC_IDX_PTRACE]            = 117u ^ SC_XOR_KEY,
     [SC_IDX_GETPID]            = 172u ^ SC_XOR_KEY,
     [SC_IDX_GETPPID]           = 173u ^ SC_XOR_KEY,
     [SC_IDX_PRCTL]             = 167u ^ SC_XOR_KEY,
@@ -27,6 +27,9 @@ const volatile uint32_t hARMless_sc[SC_TABLE_LEN] = {
     [SC_IDX_IO_URING_ENTER]    = 426u ^ SC_XOR_KEY,
     [SC_IDX_IO_URING_REGISTER] = 427u ^ SC_XOR_KEY,
 };
+
+__attribute__((used))
+volatile uint32_t g_sc_xor_key = SC_XOR_KEY;
 
 static const uint32_t crc32_table[256] = {
     0x00000000, 0x77073096, 0xEE0E612C, 0x990951BA, 0x076DC419, 0x706AF48F,
