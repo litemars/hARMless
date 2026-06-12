@@ -1,11 +1,27 @@
 # Compiler detection
 UNAME_M := $(shell uname -m)
-CC := gcc
-TARGET_CC := gcc
+CC      := gcc
 
-# Cross-compilation setup for ARM64
-ifeq ($(UNAME_M), x86_64)
-    TARGET_CC := aarch64-linux-gnu-gcc
+# Target architecture: arm64 (default) or x86_64
+# Override with: make ARCH=x86_64
+ARCH ?= arm64
+
+ifeq ($(ARCH), x86_64)
+    ifeq ($(UNAME_M), x86_64)
+        TARGET_CC := gcc                     # native x86-64 build
+    else
+        TARGET_CC := x86_64-linux-gnu-gcc    # cross-compile from ARM64
+    endif
+    TARGET_ARCH_FLAGS := -DTARGET_X86_64
+else ifeq ($(ARCH), arm64)
+    ifeq ($(UNAME_M), x86_64)
+        TARGET_CC := aarch64-linux-gnu-gcc   # cross-compile from x86-64
+    else
+        TARGET_CC := gcc                     # native ARM64 build
+    endif
+    TARGET_ARCH_FLAGS := -DTARGET_ARM64
+else
+    $(error Unknown ARCH '$(ARCH)'. Use ARCH=arm64 or ARCH=x86_64)
 endif
 
 # Compiler flags
@@ -52,11 +68,11 @@ $(BUILD_DIR):
 
 # Build packer
 $(PACKER_BIN): $(PACKER_SOURCES)
-	$(CC) $(CFLAGS) $(SECURITY_FLAGS) $(OPENSSL_CFLAGS) $(INCLUDES) -o $@ $^ $(OPENSSL_LDFLAGS)
+	$(CC) $(CFLAGS) $(SECURITY_FLAGS) $(TARGET_ARCH_FLAGS) $(OPENSSL_CFLAGS) $(INCLUDES) -o $@ $^ $(OPENSSL_LDFLAGS)
 
 # Build loader
 $(LOADER_BIN): $(LOADER_SOURCES)
-	$(TARGET_CC) $(TARGET_CFLAGS) $(STEALTH_FLAGS) $(OPENSSL_CFLAGS) $(INCLUDES) -o $@ $^ $(OPENSSL_LDFLAGS) 2>/dev/null || $(TARGET_CC) $(TARGET_CFLAGS) $(STEALTH_FLAGS) $(OPENSSL_CFLAGS) $(INCLUDES) -o $@ $^ $(OPENSSL_LDFLAGS) -lzstd -lz
+	$(TARGET_CC) $(TARGET_CFLAGS) $(STEALTH_FLAGS) $(TARGET_ARCH_FLAGS) $(OPENSSL_CFLAGS) $(INCLUDES) -o $@ $^ $(OPENSSL_LDFLAGS) 2>/dev/null || $(TARGET_CC) $(TARGET_CFLAGS) $(STEALTH_FLAGS) $(TARGET_ARCH_FLAGS) $(OPENSSL_CFLAGS) $(INCLUDES) -o $@ $^ $(OPENSSL_LDFLAGS) -lzstd -lz
 
 # Build stub generator
 $(STUBGEN_BIN): $(STUBGEN_SOURCES)
@@ -89,14 +105,20 @@ test:
 
 # Install dependencies
 install-deps:
-	@echo "Installing ARM64 cross-compilation and OpenSSL dependencies..."
+	@echo "Installing cross-compilation and OpenSSL dependencies for ARCH=$(ARCH)..."
 	@if command -v apt-get >/dev/null 2>&1; then \
 		sudo apt-get update && \
-		sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libssl-dev; \
+		if [ "$(ARCH)" = "x86_64" ] && [ "$(UNAME_M)" != "x86_64" ]; then \
+			sudo apt-get install -y gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu libssl-dev; \
+		elif [ "$(ARCH)" = "arm64" ] && [ "$(UNAME_M)" = "x86_64" ]; then \
+			sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libssl-dev; \
+		else \
+			sudo apt-get install -y gcc libssl-dev; \
+		fi; \
 	elif command -v yum >/dev/null 2>&1; then \
-		sudo yum install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu openssl-devel; \
+		sudo yum install -y gcc openssl-devel; \
 	elif command -v pacman >/dev/null 2>&1; then \
-		sudo pacman -S aarch64-linux-gnu-gcc aarch64-linux-gnu-binutils openssl; \
+		sudo pacman -S gcc openssl; \
 	else \
-		echo "Please install ARM64 cross-compilation and OpenSSL tools manually"; \
+		echo "Please install cross-compilation and OpenSSL tools manually"; \
 	fi

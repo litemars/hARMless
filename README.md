@@ -1,21 +1,21 @@
 # 🛡️ hARMless
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Platform](https://img.shields.io/badge/platform-ARM64%20Linux-green.svg)
+![Platform](https://img.shields.io/badge/platform-ARM64%20%7C%20x86--64%20Linux-green.svg)
 ![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)
 ![Stars](https://img.shields.io/github/stars/litemars/hARMless?style=social)
 
 
 
-**An ARM64 ELF Packer/Loader for AArch64 Linux Binaries**
+**An ELF Packer/Loader for ARM64 and x86-64 Linux Binaries**
 
-A comprehensive security research tool that encrypts ARM64 ELF executables using multi-layer encryption and provides runtime in-memory execution without writing the original binary to disk.
+A comprehensive security research tool that encrypts ARM64 or x86-64 ELF executables using multi-layer encryption and provides runtime in-memory execution without writing the original binary to disk.
 
 ---
 
 ## Features
 
-- **ARM64 ELF Support**: Specifically designed for AArch64 Linux binaries
+- **Multi-Architecture ELF Support**: ARM64 (AArch64) and x86-64 Linux binaries; target selected at build time with `ARCH=arm64` (default) or `ARCH=x86_64`
 - **Multi-Layer Encryption**: Triple encryption using AES-256, ChaCha20, and RC4
 - **Memory Execution**: Runtime decryption and execution entirely in memory using `memfd_create`
 - **Code Obfuscation**: Advanced obfuscation techniques for anti-analysis
@@ -35,13 +35,16 @@ A comprehensive security research tool that encrypts ARM64 ELF executables using
 git clone https://github.com/litemars/hARMless.git
 cd hARMless
 
-# Build everything
+# Build everything (ARM64 target, default)
 make all
 
-# Pack a binary
-make pack INPUT=/bin/ls OUTPUT=packed_ls
+# Build for x86-64 target
+make all ARCH=x86_64
 
-# Run the packed binary
+# Pack a binary (must match the target ARCH the loader was built for)
+make pack INPUT=/bin/ls OUTPUT=packed_ls ARCH=x86_64
+
+# Run the packed binary on an x86-64 Linux machine
 ./packed_ls
 ```
 
@@ -51,11 +54,18 @@ make pack INPUT=/bin/ls OUTPUT=packed_ls
 
 ### Prerequisites
 
-- **ARM64/AArch64 Linux system** or cross-compilation toolchain
-- **GCC** for ARM64 (`aarch64-linux-gnu-gcc` or native)
+- **Linux system** (ARM64 or x86-64) or a cross-compilation toolchain
+- **GCC** — native or the appropriate cross-compiler (see table below)
 - **Make**
 - **OpenSSL** (`libssl-dev`) — required for AES-256 and ChaCha20 via the EVP API
 - **Standard development tools** (`git`, `build-essential`)
+
+| Host → Target | Compiler needed |
+|---------------|----------------|
+| x86-64 → x86-64 | `gcc` (native) |
+| ARM64 → ARM64 | `gcc` (native) |
+| x86-64 → ARM64 | `aarch64-linux-gnu-gcc` |
+| ARM64 → x86-64 | `x86_64-linux-gnu-gcc` |
 
 ### Build Steps
 
@@ -64,23 +74,32 @@ make pack INPUT=/bin/ls OUTPUT=packed_ls
 git clone https://github.com/litemars/hARMless.git
 cd hARMless
 
-# 2. Build all components
+# 2a. Build for ARM64 (default)
 make all
 
+# 2b. Build for x86-64
+make all ARCH=x86_64
+
 # This creates:
-# - build/packer    : Binary packer
-# - build/loader    : Stub loader
-# - build/stubgen   : Stub generator
+# - build/packer    : Binary packer  (validates ELF machine type for chosen ARCH)
+# - build/loader    : Stub loader    (compiled for the chosen ARCH)
+# - build/stubgen   : Stub generator (host-native, arch-agnostic)
 ```
 
-### Cross-Compilation (x86_64 → ARM64)
+### Cross-Compilation
 
 ```bash
-# Install ARM64 cross-compiler and OpenSSL
+# x86-64 host → ARM64 target (existing behaviour, ARCH=arm64 is the default)
 sudo apt-get install gcc-aarch64-linux-gnu libssl-dev
+make all ARCH=arm64
 
-# Build with cross-compiler
-make CC=aarch64-linux-gnu-gcc all
+# ARM64 host → x86-64 target
+sudo apt-get install gcc-x86-64-linux-gnu libssl-dev
+make all ARCH=x86_64
+
+# Or let install-deps handle it:
+make install-deps ARCH=x86_64
+make all ARCH=x86_64
 ```
 
 ---

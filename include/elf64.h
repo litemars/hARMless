@@ -29,7 +29,8 @@ typedef int64_t Elf64_Sxword;
 #define ELFDATA2MSB 2
 
 // ELF Machine types
-#define EM_NONE 0
+#define EM_NONE    0
+#define EM_X86_64  62   // x86-64
 #define EM_AARCH64 183  // ARM64
 
 // ELF File types
@@ -116,6 +117,7 @@ typedef struct {
 
 int is_elf64(const void* data);
 int is_elf64_arm64(const void* data);
+int is_elf64_x86_64(const void* data);
 void print_elf64_header(const Elf64_Ehdr* ehdr);
 
 #endif // ELF64_H

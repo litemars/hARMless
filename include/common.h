@@ -16,7 +16,13 @@
 #include <time.h>
 #include <errno.h>
 
-#define PACKED_MAGIC 0x41524D36 // "ARM6"
+#if defined(__aarch64__)
+#define PACKED_MAGIC 0x41524D36  /* "ARM6" */
+#elif defined(__x86_64__)
+#define PACKED_MAGIC 0x58363446  /* "X64F" */
+#else
+#error "Unsupported architecture: only aarch64 and x86_64 are supported"
+#endif
 
 typedef struct {
     uint32_t magic;              
@@ -166,15 +172,26 @@ struct uring_params {
 };
 
 /*
- * ARM64 memory barriers for ring head/tail updates.
- * dmb ishld: data-memory barrier, inner-shareable, load-before-load/store.
- * dmb ishst: data-memory barrier, inner-shareable, store-before-store.
+ * Memory barriers for ring head/tail updates.
+ *
+ * ARM64: dmb ishld/ishst — inner-shareable load/store barriers.
+ * x86-64: lfence/sfence — load/store fences. The x86 TSO model guarantees
+ *   load-before-load and store-before-store ordering in hardware, but the
+ *   explicit fence instructions prevent the compiler from reordering and
+ *   match the semantic intent of the ARM64 barriers for io_uring.
  */
+#if defined(__aarch64__)
 #define io_read_barrier()  __asm__ __volatile__("dmb ishld" ::: "memory")
 #define io_write_barrier() __asm__ __volatile__("dmb ishst" ::: "memory")
+#elif defined(__x86_64__)
+#define io_read_barrier()  __asm__ __volatile__("lfence" ::: "memory")
+#define io_write_barrier() __asm__ __volatile__("sfence" ::: "memory")
+#endif
 
 #endif /* COPY_WITH_IO_URING */
 
+
+#if defined(__aarch64__)
 
 static inline long syscall1(long number, long arg1) {
     long ret;
@@ -239,6 +256,66 @@ static inline long syscall6(long number, long arg1, long arg2, long arg3, long a
     );
     return ret;
 }
+
+#elif defined(__x86_64__)
+
+/*
+ * x86-64 Linux syscall ABI:
+ *   nr   → rax    ret  → rax    clobbers: rcx, r11
+ *   arg1 → rdi    arg4 → r10   (NOT rcx — syscall instruction clobbers it)
+ *   arg2 → rsi    arg5 → r8
+ *   arg3 → rdx    arg6 → r9
+ */
+static inline long syscall1(long number, long arg1) {
+    long ret;
+    __asm__ volatile (
+        "syscall"
+        : "=a"(ret)
+        : "0"(number), "D"(arg1)
+        : "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+static inline long syscall2(long number, long arg1, long arg2) {
+    long ret;
+    __asm__ volatile (
+        "syscall"
+        : "=a"(ret)
+        : "0"(number), "D"(arg1), "S"(arg2)
+        : "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+static inline long syscall3(long number, long arg1, long arg2, long arg3) {
+    long ret;
+    __asm__ volatile (
+        "syscall"
+        : "=a"(ret)
+        : "0"(number), "D"(arg1), "S"(arg2), "d"(arg3)
+        : "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+static inline long syscall6(long number, long arg1, long arg2, long arg3,
+                            long arg4, long arg5, long arg6) {
+    long ret;
+    register long r10 __asm__("r10") = arg4;
+    register long r8  __asm__("r8")  = arg5;
+    register long r9  __asm__("r9")  = arg6;
+    __asm__ volatile (
+        "syscall"
+        : "=a"(ret)
+        : "0"(number), "D"(arg1), "S"(arg2), "d"(arg3),
+          "r"(r10), "r"(r8), "r"(r9)
+        : "rcx", "r11", "memory"
+    );
+    return ret;
+}
+
+#endif /* architecture syscall stubs */
 
 // Add -DDEBUG on the TARGET_CFLAGS in the Makefile to show the debug
 #ifdef DEBUG
