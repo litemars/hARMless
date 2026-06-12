@@ -35,14 +35,15 @@ A comprehensive security research tool that encrypts ARM64 or x86-64 ELF executa
 git clone https://github.com/litemars/hARMless.git
 cd hARMless
 
-# Build everything (ARM64 target, default)
+# Build for the host architecture (auto-detected)
 make all
 
-# Build for x86-64 target
+# Override to cross-compile for a different target
+make all ARCH=arm64
 make all ARCH=x86_64
 
-# Pack a binary (must match the target ARCH the loader was built for)
-make pack INPUT=/bin/ls OUTPUT=packed_ls ARCH=x86_64
+# Pack a binary (ARCH must match what the loader was built for)
+make pack INPUT=/bin/ls OUTPUT=packed_ls
 
 # Run the packed binary on an x86-64 Linux machine
 ./packed_ls

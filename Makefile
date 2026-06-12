@@ -2,9 +2,14 @@
 UNAME_M := $(shell uname -m)
 CC      := gcc
 
-# Target architecture: arm64 (default) or x86_64
-# Override with: make ARCH=x86_64
-ARCH ?= arm64
+# Target architecture: defaults to host arch, override with ARCH=arm64 or ARCH=x86_64
+ifeq ($(UNAME_M), x86_64)
+    ARCH ?= x86_64
+else ifeq ($(UNAME_M), aarch64)
+    ARCH ?= arm64
+else
+    $(error Cannot auto-detect ARCH from host '$(UNAME_M)'. Set ARCH=arm64 or ARCH=x86_64 explicitly)
+endif
 
 ifeq ($(ARCH), x86_64)
     ifeq ($(UNAME_M), x86_64)
