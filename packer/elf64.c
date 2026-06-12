@@ -16,6 +16,11 @@ int is_elf64_arm64(const void* data) {
     return is_elf64(data) && ehdr->e_machine == EM_AARCH64;
 }
 
+int is_elf64_x86_64(const void* data) {
+    const Elf64_Ehdr* ehdr = (const Elf64_Ehdr*)data;
+    return is_elf64(data) && ehdr->e_machine == EM_X86_64;
+}
+
 void print_elf64_header(const Elf64_Ehdr* ehdr) {
     printf("ELF Header:\n");
     printf("  Entry point: 0x%lx\n", (unsigned long)ehdr->e_entry);

@@ -21,31 +21,43 @@ echo "=== hARMless Test ==="
 echo "Testing with /bin/ls"
 echo
 
-# Check if we're on ARM64
-if [[ $(uname -m) != "aarch64" ]]; then
-    echo "ERROR: This test must run on ARM64 architecture"
-    exit 1
-fi
+# Detect architecture and set ARCH accordingly
+UNAME_M=$(uname -m)
+case "$UNAME_M" in
+    aarch64)
+        ARCH=arm64
+        ELF_PATTERN="ARM aarch64"
+        ;;
+    x86_64)
+        ARCH=x86_64
+        ELF_PATTERN="x86-64"
+        ;;
+    *)
+        echo "ERROR: Unsupported architecture: $UNAME_M"
+        exit 1
+        ;;
+esac
+echo "[x] Detected architecture: $ARCH"
+echo
 
-# Check if /bin/ls exists and is ARM64 ELF
+# Check if /bin/ls exists and matches the current architecture
 if [[ ! -f /bin/ls ]]; then
     echo "ERROR: /bin/ls not found"
     exit 1
 fi
 
-if ! file /bin/ls | grep -q "ARM aarch64"; then
-    echo "ERROR: /bin/ls is not an ARM64 binary"
+if ! file /bin/ls | grep -q "$ELF_PATTERN"; then
+    echo "ERROR: /bin/ls is not a $ARCH binary (file says: $(file /bin/ls))"
     exit 1
 fi
 
-echo
-echo "[x] Found ARM64 /bin/ls"
+echo "[x] Found $ARCH /bin/ls"
 echo
 
 # Build the tools
 echo "Building tools..."
 cd ..
-make clean && make all
+make clean && make all ARCH=$ARCH
 cd tests
 
 # Test packing

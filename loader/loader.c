@@ -39,7 +39,7 @@ static const struct { size_t off; size_t len; } env_names[] = {
     { STR_OFF_RADARE2_LOG,  STR_LEN_RADARE2_LOG  },
 };
 
-int detect_ptrace_arm64(void) {
+int detect_ptrace(void) {
     pid_t child = fork();
     if (child == 0) { 
         if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) < 0) {
@@ -179,7 +179,7 @@ int check_debug_environment(void) {
 int comprehensive_anti_debug_check() {
 
     // This logic can be expanded
-    if (detect_ptrace_arm64()) {
+    if (detect_ptrace()) {
         return 1;
     }
     if (check_proc_status()) {

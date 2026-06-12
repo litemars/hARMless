@@ -6,6 +6,7 @@
 #include <openssl/rand.h>
 #include <openssl/err.h>
 
+#if defined(__aarch64__)
 const volatile uint32_t hARMless_sc[SC_TABLE_LEN] = {
     [SC_IDX_READ]              =  63u ^ SC_XOR_KEY,
     [SC_IDX_WRITE]             =  64u ^ SC_XOR_KEY,
@@ -27,6 +28,31 @@ const volatile uint32_t hARMless_sc[SC_TABLE_LEN] = {
     [SC_IDX_IO_URING_ENTER]    = 426u ^ SC_XOR_KEY,
     [SC_IDX_IO_URING_REGISTER] = 427u ^ SC_XOR_KEY,
 };
+#elif defined(__x86_64__)
+const volatile uint32_t hARMless_sc[SC_TABLE_LEN] = {
+    [SC_IDX_READ]              =   0u ^ SC_XOR_KEY,
+    [SC_IDX_WRITE]             =   1u ^ SC_XOR_KEY,
+    [SC_IDX_OPEN]              =   2u ^ SC_XOR_KEY,
+    [SC_IDX_CLOSE]             =   3u ^ SC_XOR_KEY,
+    [SC_IDX_MMAP]              =   9u ^ SC_XOR_KEY,
+    [SC_IDX_MUNMAP]            =  11u ^ SC_XOR_KEY,
+    [SC_IDX_EXECVE]            =  59u ^ SC_XOR_KEY,
+    [SC_IDX_MEMFD_CREATE]      = 319u ^ SC_XOR_KEY,
+    [SC_IDX_FTRUNCATE]         =  77u ^ SC_XOR_KEY,
+    [SC_IDX_LSEEK]             =   8u ^ SC_XOR_KEY,
+    [SC_IDX_MPROTECT]          =  10u ^ SC_XOR_KEY,
+    [SC_IDX_PTRACE]            = 101u ^ SC_XOR_KEY,
+    [SC_IDX_GETPID]            =  39u ^ SC_XOR_KEY,
+    [SC_IDX_GETPPID]           = 110u ^ SC_XOR_KEY,
+    [SC_IDX_PRCTL]             = 157u ^ SC_XOR_KEY,
+    [SC_IDX_MSYNC]             =  26u ^ SC_XOR_KEY,
+    [SC_IDX_IO_URING_SETUP]    = 425u ^ SC_XOR_KEY,
+    [SC_IDX_IO_URING_ENTER]    = 426u ^ SC_XOR_KEY,
+    [SC_IDX_IO_URING_REGISTER] = 427u ^ SC_XOR_KEY,
+};
+#else
+#error "Unsupported architecture: only aarch64 and x86_64 are supported"
+#endif
 
 __attribute__((used))
 volatile uint32_t g_sc_xor_key = SC_XOR_KEY;

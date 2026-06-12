@@ -60,8 +60,30 @@ int is_elf64_arm64(const void* data) {
     return is_elf64(data) && ehdr->e_machine == EM_AARCH64;
 }
 
+int is_elf64_x86_64(const void* data) {
+    const Elf64_Ehdr* ehdr = (const Elf64_Ehdr*)data;
+    return is_elf64(data) && ehdr->e_machine == EM_X86_64;
+}
+
+static int is_elf64_target(const void* data) {
+#if defined(TARGET_X86_64)
+    return is_elf64_x86_64(data);
+#else
+    return is_elf64_arm64(data);
+#endif
+}
+
+static const char* target_arch_name(void) {
+#if defined(TARGET_X86_64)
+    return "x86-64";
+#else
+    return "ARM64";
+#endif
+}
+
 void print_usage(const char* program_name) {
-    printf("Advanced ARM64 ELF Packer v2 - Integrated Obfuscation\n");
+    printf("Advanced %s ELF Packer v2 - Integrated Obfuscation\n",
+           target_arch_name());
     printf("Usage: %s <input_elf> <output_packed>\n", program_name);
 }
 
@@ -75,8 +97,7 @@ int main(int argc, char* argv[]) {
     const char* output_file = argv[2];
 
 
-    printf("Advanced ARM64 ELF Packer\n");
-
+    printf("Advanced %s ELF Packer\n", target_arch_name());
 
     // Open and read input file
     FILE* input_fp = fopen(input_file, "rb");
@@ -111,14 +132,14 @@ int main(int argc, char* argv[]) {
     }
     fclose(input_fp);
 
-    // Verify ARM64 ELF
-    if (!is_elf64_arm64(file_data)) {
-        fprintf(stderr, "Error: Input file is not an ARM64 ELF binary\n");
+    if (!is_elf64_target(file_data)) {
+        fprintf(stderr, "Error: Input file is not a %s ELF binary\n",
+                target_arch_name());
         free(file_data);
         return 1;
     }
 
-    printf("Packing ARM64 ELF binary: %s\n", input_file);
+    printf("Packing %s ELF binary: %s\n", target_arch_name(), input_file);
     printf("Original size: %zu bytes\n", file_size);
 
     strip_elf_metadata(file_data, file_size);
