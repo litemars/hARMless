@@ -55,6 +55,20 @@ int is_elf64(const void* data) {
             ehdr->e_ident[4] == ELFCLASS64);
 }
 
+int is_elf32(const void* data) {
+    const Elf32_Ehdr* ehdr = (const Elf32_Ehdr*)data;
+    return (ehdr->e_ident[0] == ELFMAG0 &&
+            ehdr->e_ident[1] == ELFMAG1 &&
+            ehdr->e_ident[2] == ELFMAG2 &&
+            ehdr->e_ident[3] == ELFMAG3 &&
+            ehdr->e_ident[4] == ELFCLASS32);
+}
+
+int is_elf32_arm(const void* data) {
+    const Elf32_Ehdr* ehdr = (const Elf32_Ehdr*)data;
+    return is_elf32(data) && ehdr->e_machine == EM_ARM;
+}
+
 int is_elf64_arm64(const void* data) {
     const Elf64_Ehdr* ehdr = (const Elf64_Ehdr*)data;
     return is_elf64(data) && ehdr->e_machine == EM_AARCH64;
@@ -66,7 +80,9 @@ int is_elf64_x86_64(const void* data) {
 }
 
 static int is_elf64_target(const void* data) {
-#if defined(TARGET_X86_64)
+#if defined(TARGET_ARM32)
+    return is_elf32_arm(data);
+#elif defined(TARGET_X86_64)
     return is_elf64_x86_64(data);
 #else
     return is_elf64_arm64(data);
@@ -74,7 +90,9 @@ static int is_elf64_target(const void* data) {
 }
 
 static const char* target_arch_name(void) {
-#if defined(TARGET_X86_64)
+#if defined(TARGET_ARM32)
+    return "ARM32/EABI5";
+#elif defined(TARGET_X86_64)
     return "x86-64";
 #else
     return "ARM64";

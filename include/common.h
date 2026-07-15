@@ -16,12 +16,20 @@
 #include <time.h>
 #include <errno.h>
 
-#if defined(__aarch64__)
+#if defined(TARGET_ARM32)
+#define PACKED_MAGIC 0x41523332  /* "AR32" */
+#elif defined(TARGET_ARM64)
+#define PACKED_MAGIC 0x41524D36  /* "ARM6" */
+#elif defined(TARGET_X86_64)
+#define PACKED_MAGIC 0x58363446  /* "X64F" */
+#elif defined(__arm__)
+#define PACKED_MAGIC 0x41523332  /* "AR32" */
+#elif defined(__aarch64__)
 #define PACKED_MAGIC 0x41524D36  /* "ARM6" */
 #elif defined(__x86_64__)
 #define PACKED_MAGIC 0x58363446  /* "X64F" */
 #else
-#error "Unsupported architecture: only aarch64 and x86_64 are supported"
+#error "Unsupported architecture: only arm, aarch64 and x86_64 are supported"
 #endif
 
 typedef struct {
@@ -186,6 +194,9 @@ struct uring_params {
 #elif defined(__x86_64__)
 #define io_read_barrier()  __asm__ __volatile__("lfence" ::: "memory")
 #define io_write_barrier() __asm__ __volatile__("sfence" ::: "memory")
+#elif defined(__arm__)
+#define io_read_barrier()  __asm__ __volatile__("dmb ish" ::: "memory")
+#define io_write_barrier() __asm__ __volatile__("dmb ish" ::: "memory")
 #endif
 
 #endif /* COPY_WITH_IO_URING */
@@ -255,6 +266,65 @@ static inline long syscall6(long number, long arg1, long arg2, long arg3, long a
         : "x0", "x1", "x2", "x3", "x4", "x5", "x8", "memory"
     );
     return ret;
+}
+
+#elif defined(__arm__)
+
+static inline long syscall1(long number, long arg1) {
+    register long r7 __asm__("r7") = number;
+    register long r0 __asm__("r0") = arg1;
+    __asm__ volatile (
+        "svc 0\n"
+        : "+r"(r0)
+        : "r"(r7)
+        : "memory"
+    );
+    return r0;
+}
+
+static inline long syscall2(long number, long arg1, long arg2) {
+    register long r7 __asm__("r7") = number;
+    register long r0 __asm__("r0") = arg1;
+    register long r1 __asm__("r1") = arg2;
+    __asm__ volatile (
+        "svc 0\n"
+        : "+r"(r0)
+        : "r"(r7), "r"(r1)
+        : "memory"
+    );
+    return r0;
+}
+
+static inline long syscall3(long number, long arg1, long arg2, long arg3) {
+    register long r7 __asm__("r7") = number;
+    register long r0 __asm__("r0") = arg1;
+    register long r1 __asm__("r1") = arg2;
+    register long r2 __asm__("r2") = arg3;
+    __asm__ volatile (
+        "svc 0\n"
+        : "+r"(r0)
+        : "r"(r7), "r"(r1), "r"(r2)
+        : "memory"
+    );
+    return r0;
+}
+
+static inline long syscall6(long number, long arg1, long arg2, long arg3,
+                            long arg4, long arg5, long arg6) {
+    register long r7 __asm__("r7") = number;
+    register long r0 __asm__("r0") = arg1;
+    register long r1 __asm__("r1") = arg2;
+    register long r2 __asm__("r2") = arg3;
+    register long r3 __asm__("r3") = arg4;
+    register long r4 __asm__("r4") = arg5;
+    register long r5 __asm__("r5") = arg6;
+    __asm__ volatile (
+        "svc 0\n"
+        : "+r"(r0)
+        : "r"(r7), "r"(r1), "r"(r2), "r"(r3), "r"(r4), "r"(r5)
+        : "memory"
+    );
+    return r0;
 }
 
 #elif defined(__x86_64__)

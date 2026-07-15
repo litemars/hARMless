@@ -270,10 +270,12 @@ int main(int argc, char* argv[], char* envp[]) {
 
     header = find_packed_header(self_data, self_size);
     if (!header) {
+        DBG("packed header not found\n");
         secure_memory_wipe(self_data, self_size);
         free(self_data);
         return 1;
     }
+    DBG("packed header found\n");
 
     {
         uint8_t* hb = (uint8_t*)header;
@@ -283,6 +285,7 @@ int main(int argc, char* argv[], char* envp[]) {
     }
 
     if (comprehensive_anti_debug_check()) {
+        DBG("anti-debug pre-decrypt triggered\n");
         secure_memory_wipe(self_data, self_size);
         free(self_data);
         exit(0);
@@ -290,12 +293,14 @@ int main(int argc, char* argv[], char* envp[]) {
 
     encrypted_data = (uint8_t*)header + sizeof(pack_header_t);
     if (encrypted_data + header->packed_size > self_data + self_size) {
+        DBG("packed payload out of bounds\n");
         secure_memory_wipe(self_data, self_size);
         free(self_data);
         return 1;
     }
     decrypted_data = malloc(header->original_size);
     if (!decrypted_data) {
+        DBG("decrypted allocation failed\n");
         secure_memory_wipe(self_data, self_size);
         free(self_data);
         return 1;
@@ -306,13 +311,15 @@ int main(int argc, char* argv[], char* envp[]) {
     multi_layer_decrypt(decrypted_data, header->original_size, header);
     calculated_crc = crc32(decrypted_data, header->original_size);
     if (calculated_crc != header->crc32) {
+        DBG("crc check failed\n");
         secure_memory_wipe(decrypted_data, header->original_size);
         secure_memory_wipe(self_data, self_size);
         free(decrypted_data);
         free(self_data);
         return 1;
     }
-    if (!is_elf64(decrypted_data)) {
+    if (!is_target_elf(decrypted_data)) {
+        DBG("target ELF check failed\n");
         secure_memory_wipe(decrypted_data, header->original_size);
         secure_memory_wipe(self_data, self_size);
         free(decrypted_data);
@@ -320,13 +327,16 @@ int main(int argc, char* argv[], char* envp[]) {
         return 1;
     } 
     if (comprehensive_anti_debug_check()) {
+        DBG("anti-debug post-decrypt triggered\n");
         secure_memory_wipe(decrypted_data, header->original_size);
         secure_memory_wipe(self_data, self_size);
         free(decrypted_data);
         free(self_data);
         exit(0);
     }
+    DBG("executing payload from memory\n");
     if (execute_from_memory(decrypted_data, header->original_size, argv, envp) < 0) {
+        DBG("execute_from_memory failed\n");
         secure_memory_wipe(decrypted_data, header->original_size);
         secure_memory_wipe(self_data, self_size);
         free(decrypted_data);

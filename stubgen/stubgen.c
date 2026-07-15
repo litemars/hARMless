@@ -42,7 +42,7 @@ static int slurp_file(const char* path, uint8_t** out_buf, size_t* out_size) {
     size_t n = fread(buf, 1, (size_t)sz, fp);
     fclose(fp);
     if (n != (size_t)sz) {
-        fprintf(stderr, "Error: short read on '%s' (%zu of %ld)\n", path, n, sz);
+        fprintf(stderr, "Error: short read on '%s' (%zu of %ld bytes)\n", path, n, sz);
         free(buf);
         return -1;
     }
@@ -51,11 +51,6 @@ static int slurp_file(const char* path, uint8_t** out_buf, size_t* out_size) {
     return 0;
 }
 
-/*
- * get_random_bytes: fill buf with `len` cryptographically random bytes
- * from /dev/urandom. Falls back to time/pid-seeded rand() only if the
- * device cannot be opened (very unusual on Linux).
- */
 static int get_random_bytes(uint8_t* buf, size_t len) {
     FILE* urandom = fopen("/dev/urandom", "rb");
     if (urandom) {
@@ -63,9 +58,11 @@ static int get_random_bytes(uint8_t* buf, size_t len) {
         fclose(urandom);
         if (n == len) return 0;
     }
-    /* Fallback: explicitly inferior, but better than failing the build. */
     static int seeded = 0;
-    if (!seeded) { srand((unsigned)(time(NULL) ^ getpid())); seeded = 1; }
+    if (!seeded) {
+        srand((unsigned)(time(NULL) ^ getpid()));
+        seeded = 1;
+    }
     for (size_t i = 0; i < len; i++) buf[i] = (uint8_t)(rand() & 0xFF);
     return 0;
 }
@@ -78,34 +75,150 @@ static int strtab_streq(const char* strtab, size_t strtab_size,
         char c = strtab[offset + i];
         char n = needle[i];
         if (c != n) return 0;
-        if (c == '\0') return 1;  /* both NUL means exact match */
+        if (c == '\0') return 1;
         i++;
     }
     return 0;
 }
 
-static int find_loader_symbol(const uint8_t* loader, size_t loader_size,
-                              const char* sym_name,
-                              size_t* out_offset, size_t* out_size) {
+static int find_loader_symbol32(const uint8_t* loader, size_t loader_size,
+                                const char* sym_name,
+                                size_t* out_offset, size_t* out_size) {
+    if (loader_size < sizeof(Elf32_Ehdr)) {
+        fprintf(stderr, "Error: loader smaller than ELF32 header\n");
+        return -1;
+    }
+    if (!is_elf32(loader)) {
+        fprintf(stderr, "Error: loader is not ELF32\n");
+        return -1;
+    }
+
+    const Elf32_Ehdr* ehdr = (const Elf32_Ehdr*)loader;
+    if (ehdr->e_shoff == 0 || ehdr->e_shnum == 0) {
+        fprintf(stderr, "Error: loader has no section header table - "
+                        "the target loader must be unstripped for stubgen\n");
+        return -1;
+    }
+    if (ehdr->e_shentsize != sizeof(Elf32_Shdr)) {
+        fprintf(stderr, "Error: unexpected ELF32 section header size %u\n",
+                ehdr->e_shentsize);
+        return -1;
+    }
+
+    size_t sht_size = (size_t)ehdr->e_shnum * ehdr->e_shentsize;
+    if (ehdr->e_shoff > loader_size || sht_size > loader_size - ehdr->e_shoff) {
+        fprintf(stderr, "Error: section header table out of file bounds\n");
+        return -1;
+    }
+    const Elf32_Shdr* sections = (const Elf32_Shdr*)(loader + ehdr->e_shoff);
+
+    const Elf32_Shdr* symtab = NULL;
+    for (size_t i = 0; i < ehdr->e_shnum; i++) {
+        if (sections[i].sh_type == SHT_SYMTAB) {
+            symtab = &sections[i];
+            break;
+        }
+    }
+    if (!symtab) {
+        fprintf(stderr, "Error: loader has no .symtab - "
+                        "the target loader must be unstripped for stubgen\n");
+        return -1;
+    }
+    if (symtab->sh_entsize != sizeof(Elf32_Sym)) {
+        fprintf(stderr, "Error: unexpected ELF32 symbol entry size %u\n",
+                symtab->sh_entsize);
+        return -1;
+    }
+    if (symtab->sh_offset > loader_size ||
+        symtab->sh_size > loader_size - symtab->sh_offset) {
+        fprintf(stderr, "Error: .symtab out of file bounds\n");
+        return -1;
+    }
+    if (symtab->sh_link == 0 || symtab->sh_link >= ehdr->e_shnum) {
+        fprintf(stderr, "Error: .symtab.sh_link invalid\n");
+        return -1;
+    }
+
+    const Elf32_Shdr* strtab = &sections[symtab->sh_link];
+    if (strtab->sh_type != SHT_STRTAB) {
+        fprintf(stderr, "Error: .symtab.sh_link does not point to a strtab\n");
+        return -1;
+    }
+    if (strtab->sh_offset > loader_size ||
+        strtab->sh_size > loader_size - strtab->sh_offset) {
+        fprintf(stderr, "Error: .strtab out of file bounds\n");
+        return -1;
+    }
+
+    const char* names = (const char*)(loader + strtab->sh_offset);
+    const Elf32_Sym* syms = (const Elf32_Sym*)(loader + symtab->sh_offset);
+    size_t nsyms = (size_t)(symtab->sh_size / sizeof(Elf32_Sym));
+
+    for (size_t i = 0; i < nsyms; i++) {
+        const Elf32_Sym* s = &syms[i];
+        if (s->st_name == 0) continue;
+        if (s->st_shndx == 0 || s->st_shndx >= ehdr->e_shnum) continue;
+        if (!strtab_streq(names, (size_t)strtab->sh_size,
+                          (size_t)s->st_name, sym_name)) continue;
+
+        const Elf32_Shdr* sec = &sections[s->st_shndx];
+        if (sec->sh_type == SHT_NOBITS) {
+            fprintf(stderr, "Error: symbol '%s' is in .bss (no file image) - "
+                            "ensure it is initialized to a non-zero value\n",
+                    sym_name);
+            return -1;
+        }
+        if (s->st_value < sec->sh_addr) {
+            fprintf(stderr, "Error: symbol '%s' value below section base\n",
+                    sym_name);
+            return -1;
+        }
+
+        size_t in_section = (size_t)(s->st_value - sec->sh_addr);
+        if (in_section >= sec->sh_size) {
+            fprintf(stderr, "Error: symbol '%s' beyond section end\n", sym_name);
+            return -1;
+        }
+        size_t file_off = (size_t)sec->sh_offset + in_section;
+        if (file_off > loader_size || s->st_size > loader_size - file_off) {
+            fprintf(stderr, "Error: symbol '%s' file range out of bounds\n",
+                    sym_name);
+            return -1;
+        }
+
+        *out_offset = file_off;
+        *out_size = (size_t)s->st_size;
+        return 0;
+    }
+
+    fprintf(stderr, "Error: symbol '%s' not found in loader .symtab\n", sym_name);
+    return -1;
+}
+
+static int find_loader_symbol64(const uint8_t* loader, size_t loader_size,
+                                const char* sym_name,
+                                size_t* out_offset, size_t* out_size) {
     if (loader_size < sizeof(Elf64_Ehdr)) {
-        fprintf(stderr, "Error: loader smaller than ELF header\n");
+        fprintf(stderr, "Error: loader smaller than ELF64 header\n");
         return -1;
     }
     if (!is_elf64(loader)) {
         fprintf(stderr, "Error: loader is not ELF64\n");
         return -1;
     }
+
     const Elf64_Ehdr* ehdr = (const Elf64_Ehdr*)loader;
     if (ehdr->e_shoff == 0 || ehdr->e_shnum == 0) {
-        fprintf(stderr, "Error: loader has no section header table — "
-                        "build/loader must be unstripped for stubgen\n");
+        fprintf(stderr, "Error: loader has no section header table - "
+                        "the target loader must be unstripped for stubgen\n");
         return -1;
     }
     if (ehdr->e_shentsize != sizeof(Elf64_Shdr)) {
-        fprintf(stderr, "Error: unexpected section header size %u\n",
+        fprintf(stderr, "Error: unexpected ELF64 section header size %u\n",
                 ehdr->e_shentsize);
         return -1;
     }
+
     size_t sht_size = (size_t)ehdr->e_shnum * ehdr->e_shentsize;
     if (ehdr->e_shoff > loader_size || sht_size > loader_size - ehdr->e_shoff) {
         fprintf(stderr, "Error: section header table out of file bounds\n");
@@ -113,7 +226,6 @@ static int find_loader_symbol(const uint8_t* loader, size_t loader_size,
     }
     const Elf64_Shdr* sections = (const Elf64_Shdr*)(loader + ehdr->e_shoff);
 
-    /* Find .symtab by section type — more robust than name lookup. */
     const Elf64_Shdr* symtab = NULL;
     for (size_t i = 0; i < ehdr->e_shnum; i++) {
         if (sections[i].sh_type == SHT_SYMTAB) {
@@ -122,12 +234,12 @@ static int find_loader_symbol(const uint8_t* loader, size_t loader_size,
         }
     }
     if (!symtab) {
-        fprintf(stderr, "Error: loader has no .symtab — build/loader must "
-                        "be unstripped for stubgen\n");
+        fprintf(stderr, "Error: loader has no .symtab - "
+                        "the target loader must be unstripped for stubgen\n");
         return -1;
     }
     if (symtab->sh_entsize != sizeof(Elf64_Sym)) {
-        fprintf(stderr, "Error: unexpected symbol entry size %llu\n",
+        fprintf(stderr, "Error: unexpected ELF64 symbol entry size %llu\n",
                 (unsigned long long)symtab->sh_entsize);
         return -1;
     }
@@ -140,6 +252,7 @@ static int find_loader_symbol(const uint8_t* loader, size_t loader_size,
         fprintf(stderr, "Error: .symtab.sh_link invalid\n");
         return -1;
     }
+
     const Elf64_Shdr* strtab = &sections[symtab->sh_link];
     if (strtab->sh_type != SHT_STRTAB) {
         fprintf(stderr, "Error: .symtab.sh_link does not point to a strtab\n");
@@ -159,15 +272,12 @@ static int find_loader_symbol(const uint8_t* loader, size_t loader_size,
         const Elf64_Sym* s = &syms[i];
         if (s->st_name == 0) continue;
         if (s->st_shndx == 0 || s->st_shndx >= ehdr->e_shnum) continue;
-
         if (!strtab_streq(names, (size_t)strtab->sh_size,
                           (size_t)s->st_name, sym_name)) continue;
 
-        /* Match — translate virtual address to file offset via the
-         * containing section's sh_addr / sh_offset pair. */
         const Elf64_Shdr* sec = &sections[s->st_shndx];
         if (sec->sh_type == SHT_NOBITS) {
-            fprintf(stderr, "Error: symbol '%s' is in .bss (no file image) — "
+            fprintf(stderr, "Error: symbol '%s' is in .bss (no file image) - "
                             "ensure it is initialized to a non-zero value\n",
                     sym_name);
             return -1;
@@ -177,6 +287,7 @@ static int find_loader_symbol(const uint8_t* loader, size_t loader_size,
                     sym_name);
             return -1;
         }
+
         size_t in_section = (size_t)(s->st_value - sec->sh_addr);
         if (in_section >= sec->sh_size) {
             fprintf(stderr, "Error: symbol '%s' beyond section end\n", sym_name);
@@ -188,12 +299,93 @@ static int find_loader_symbol(const uint8_t* loader, size_t loader_size,
                     sym_name);
             return -1;
         }
+
         *out_offset = file_off;
         *out_size = (size_t)s->st_size;
         return 0;
     }
 
     fprintf(stderr, "Error: symbol '%s' not found in loader .symtab\n", sym_name);
+    return -1;
+}
+
+static int find_loader_symbol(const uint8_t* loader, size_t loader_size,
+                              const char* sym_name,
+                              size_t* out_offset, size_t* out_size) {
+    if (loader_size < EI_NIDENT) {
+        fprintf(stderr, "Error: loader smaller than ELF ident\n");
+        return -1;
+    }
+    if (is_elf32(loader)) {
+        return find_loader_symbol32(loader, loader_size, sym_name,
+                                    out_offset, out_size);
+    }
+    if (is_elf64(loader)) {
+        return find_loader_symbol64(loader, loader_size, sym_name,
+                                    out_offset, out_size);
+    }
+    fprintf(stderr, "Error: loader is not ELF32 or ELF64\n");
+    return -1;
+}
+
+static int scrub_symbols_and_strip_sections(uint8_t* loader_data,
+                                            size_t loader_size) {
+    if (loader_size < EI_NIDENT) return -1;
+
+    if (is_elf32(loader_data)) {
+        Elf32_Ehdr* ehdr = (Elf32_Ehdr*)loader_data;
+        if (ehdr->e_shoff != 0 && ehdr->e_shnum != 0) {
+            if (ehdr->e_shentsize != sizeof(Elf32_Shdr)) return -1;
+            size_t sht_size = (size_t)ehdr->e_shnum * ehdr->e_shentsize;
+            if (ehdr->e_shoff > loader_size ||
+                sht_size > loader_size - ehdr->e_shoff) return -1;
+
+            Elf32_Shdr* sections = (Elf32_Shdr*)(loader_data + ehdr->e_shoff);
+            for (size_t i = 0; i < ehdr->e_shnum; i++) {
+                if (sections[i].sh_type != SHT_SYMTAB &&
+                    sections[i].sh_type != SHT_STRTAB) continue;
+                if (sections[i].sh_offset > loader_size) continue;
+                if (sections[i].sh_size > loader_size - sections[i].sh_offset) continue;
+                if (sections[i].sh_size == 0) continue;
+                (void)get_random_bytes(loader_data + sections[i].sh_offset,
+                                       (size_t)sections[i].sh_size);
+            }
+        }
+
+        ehdr->e_shoff     = 0;
+        ehdr->e_shnum     = 0;
+        ehdr->e_shentsize = 0;
+        ehdr->e_shstrndx  = 0;
+        return 0;
+    }
+
+    if (is_elf64(loader_data)) {
+        Elf64_Ehdr* ehdr = (Elf64_Ehdr*)loader_data;
+        if (ehdr->e_shoff != 0 && ehdr->e_shnum != 0) {
+            if (ehdr->e_shentsize != sizeof(Elf64_Shdr)) return -1;
+            size_t sht_size = (size_t)ehdr->e_shnum * ehdr->e_shentsize;
+            if (ehdr->e_shoff > loader_size ||
+                sht_size > loader_size - ehdr->e_shoff) return -1;
+
+            Elf64_Shdr* sections = (Elf64_Shdr*)(loader_data + ehdr->e_shoff);
+            for (size_t i = 0; i < ehdr->e_shnum; i++) {
+                if (sections[i].sh_type != SHT_SYMTAB &&
+                    sections[i].sh_type != SHT_STRTAB) continue;
+                if (sections[i].sh_offset > loader_size) continue;
+                if (sections[i].sh_size > loader_size - sections[i].sh_offset) continue;
+                if (sections[i].sh_size == 0) continue;
+                (void)get_random_bytes(loader_data + sections[i].sh_offset,
+                                       (size_t)sections[i].sh_size);
+            }
+        }
+
+        ehdr->e_shoff     = 0;
+        ehdr->e_shnum     = 0;
+        ehdr->e_shentsize = 0;
+        ehdr->e_shstrndx  = 0;
+        return 0;
+    }
+
     return -1;
 }
 
@@ -231,7 +423,6 @@ int main(int argc, char* argv[]) {
         goto cleanup;
     }
 
-    /* Locate required patch points in the loader. */
     size_t magic_off = 0, magic_sz = 0;
     size_t poly_off  = 0, poly_sz  = 0;
     if (find_loader_symbol(loader_data, loader_size, "g_packed_magic",
@@ -249,10 +440,9 @@ int main(int argc, char* argv[]) {
         goto cleanup;
     }
 
-    /* Locate optional syscall-table re-keying symbols. */
     size_t sc_key_off = 0, sc_key_sz = 0;
     size_t sc_tab_off = 0, sc_tab_sz = 0;
-    int    has_sc_rekey = 0;
+    int has_sc_rekey = 0;
     if (find_loader_symbol(loader_data, loader_size, "g_sc_xor_key",
                            &sc_key_off, &sc_key_sz) == 0 &&
         find_loader_symbol(loader_data, loader_size, "hARMless_sc",
@@ -262,10 +452,9 @@ int main(int argc, char* argv[]) {
         has_sc_rekey = 1;
     }
 
-    /* Locate optional string-block re-keying symbols. */
     size_t str_key_off = 0, str_key_sz = 0;
     size_t str_blk_off = 0, str_blk_sz = 0;
-    int    has_str_rekey = 0;
+    int has_str_rekey = 0;
     if (find_loader_symbol(loader_data, loader_size, "g_str_xor_key",
                            &str_key_off, &str_key_sz) == 0 &&
         find_loader_symbol(loader_data, loader_size, "g_obf_str_block",
@@ -275,31 +464,22 @@ int main(int argc, char* argv[]) {
         has_str_rekey = 1;
     }
 
-    /* Generate per-pack random material. */
-    uint32_t new_magic   = 0;
+    uint32_t new_magic = 0;
     uint32_t new_xor_key = 0;
-    uint8_t  new_filler[POLYMORPH_FILLER_LEN];
-    uint16_t pad_short   = 0;
-    uint8_t  padding[POLYMORPH_PADDING_MAX];
+    uint8_t new_filler[POLYMORPH_FILLER_LEN];
+    uint16_t pad_short = 0;
+    uint8_t padding[POLYMORPH_PADDING_MAX];
 
     if (get_random_bytes((uint8_t*)&new_magic, sizeof(new_magic)) != 0) goto cleanup;
     if (get_random_bytes(new_filler, sizeof(new_filler)) != 0) goto cleanup;
     if (get_random_bytes((uint8_t*)&pad_short, sizeof(pad_short)) != 0) goto cleanup;
     if (get_random_bytes(padding, sizeof(padding)) != 0) goto cleanup;
-    size_t pad_len = (size_t)(pad_short & (POLYMORPH_PADDING_MAX - 1));  /* 0..4095 */
+    size_t pad_len = (size_t)(pad_short & (POLYMORPH_PADDING_MAX - 1));
 
-    /* Patch loader bytes in our local buffer (we own it; safe to mutate). */
     memcpy(loader_data + magic_off, &new_magic, sizeof(new_magic));
     memcpy(loader_data + poly_off, new_filler, sizeof(new_filler));
-
-    /* Patch the packed header's magic field. pack_header_t.magic is the
-     * very first field (offset 0), 4 bytes. */
     memcpy(packed_data + 0, &new_magic, sizeof(new_magic));
 
-    /* Blind the header body (bytes 4..sizeof-1) using the first
-     * (sizeof(pack_header_t)-4) bytes of new_filler as a per-pack OTP.
-     * new_filler has already been patched into g_pack_polymorph in the
-     * loader, so the loader can un-blind using g_pack_polymorph directly. */
     {
         size_t hdr_body = sizeof(pack_header_t) - sizeof(uint32_t);
         for (size_t i = 0; i < hdr_body; i++)
@@ -311,7 +491,7 @@ int main(int argc, char* argv[]) {
         memcpy(&old_xor_key, loader_data + sc_key_off, sizeof(old_xor_key));
         if (get_random_bytes((uint8_t*)&new_xor_key, sizeof(new_xor_key)) != 0)
             goto cleanup;
-        size_t   n_sc   = sc_tab_sz / sizeof(uint32_t);
+        size_t n_sc = sc_tab_sz / sizeof(uint32_t);
         uint32_t* sc_tab = (uint32_t*)(loader_data + sc_tab_off);
         for (size_t i = 0; i < n_sc; i++)
             sc_tab[i] = (sc_tab[i] ^ old_xor_key) ^ new_xor_key;
@@ -330,27 +510,11 @@ int main(int argc, char* argv[]) {
         loader_data[str_key_off] = new_str_key;
     }
 
-
-    Elf64_Ehdr* ehdr = (Elf64_Ehdr*)loader_data;
-    {
-        Elf64_Shdr* sections = (Elf64_Shdr*)(loader_data + ehdr->e_shoff);
-        for (size_t i = 0; i < ehdr->e_shnum; i++) {
-            if (sections[i].sh_type != SHT_SYMTAB &&
-                sections[i].sh_type != SHT_STRTAB) continue;
-            if (sections[i].sh_offset > loader_size) continue;
-            if (sections[i].sh_size > loader_size - sections[i].sh_offset) continue;
-            if (sections[i].sh_size == 0) continue;
-            (void)get_random_bytes(loader_data + sections[i].sh_offset,
-                                   (size_t)sections[i].sh_size);
-        }
+    if (scrub_symbols_and_strip_sections(loader_data, loader_size) != 0) {
+        fprintf(stderr, "Error: failed to scrub loader symbols\n");
+        goto cleanup;
     }
 
-    ehdr->e_shoff     = 0;
-    ehdr->e_shnum     = 0;
-    ehdr->e_shentsize = 0;
-    ehdr->e_shstrndx  = 0;
-
-    /* Write output. */
     FILE* out = fopen(output_file, "wb");
     if (!out) {
         fprintf(stderr, "Error: cannot create '%s': %s\n", output_file, strerror(errno));
