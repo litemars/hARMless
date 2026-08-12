@@ -3,7 +3,24 @@
 #include <unistd.h>
 
 void strip_elf_metadata(uint8_t* data, size_t len) {
-    if (!data || len < sizeof(Elf64_Ehdr)) return;
+    if (!data || len < EI_NIDENT) return;
+
+    if (is_elf32(data)) {
+        if (len < sizeof(Elf32_Ehdr)) return;
+
+        Elf32_Ehdr* ehdr = (Elf32_Ehdr*)data;
+        ehdr->e_shoff     = 0;
+        ehdr->e_shnum     = 0;
+        ehdr->e_shentsize = 0;
+        ehdr->e_shstrndx  = 0;
+
+        for (int i = 7; i < EI_NIDENT; i++) {
+            ehdr->e_ident[i] = 0;
+        }
+        return;
+    }
+
+    if (len < sizeof(Elf64_Ehdr)) return;
     if (!is_elf64(data)) return;
 
     Elf64_Ehdr* ehdr = (Elf64_Ehdr*)data;
@@ -54,6 +71,7 @@ void noise_delay(unsigned max_ms) {
  * sequence does not reduce to a pair of identical info-query calls.
  */
 void check_exec_context(void) {
+#if defined(__aarch64__)
     volatile long pid  = syscall1(__NR_getpid,  0);
     volatile long ppid = syscall1(__NR_getppid, 0);
     char pname[16];
@@ -62,6 +80,9 @@ void check_exec_context(void) {
      * hide_process_title was never called or prctl failed. */
     if (pid <= 0 || ppid <= 0 || pname[0] == '\0')
         noise_delay(15);
+#else
+    noise_delay(15);
+#endif
 }
 
 void secure_memory_wipe(void* ptr, size_t size) {

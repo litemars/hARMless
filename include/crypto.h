@@ -18,9 +18,9 @@ void rc4_crypt(rc4_context_t* ctx, const uint8_t* input, uint8_t* output, size_t
 void rc4_encrypt_decrypt(const uint8_t* key, size_t key_len, const uint8_t* input, uint8_t* output, size_t len);
 
 // Advanced cryptographic functions
-void aes256_encrypt(uint8_t* data, size_t len, const uint8_t* key);
-void aes256_decrypt(uint8_t* data, size_t len, const uint8_t* key);
-void chacha20_encrypt(uint8_t* data, size_t len, const uint8_t* key, const uint8_t* nonce);
-void chacha20_decrypt(uint8_t* data, size_t len, const uint8_t* key, const uint8_t* nonce);
+int aes256_encrypt(uint8_t* data, size_t len, const uint8_t* key);
+int aes256_decrypt(uint8_t* data, size_t len, const uint8_t* key);
+int chacha20_encrypt(uint8_t* data, size_t len, const uint8_t* key, const uint8_t* nonce);
+int chacha20_decrypt(uint8_t* data, size_t len, const uint8_t* key, const uint8_t* nonce);
 
 #endif

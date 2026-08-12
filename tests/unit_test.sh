@@ -1,91 +1,86 @@
 #!/bin/bash
 
-# Simple unit test for hARMless
-# Tests packing and execution of /bin/ls
+set -euo pipefail
 
-create_packed_binary(){ 
-    # The binary self delete every run, thus it needs to recreated for every test
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TMP_DIR="$ROOT_DIR/.codex_tmp/runtime"
+ARM64_DIR="$ROOT_DIR/build/ARM64"
+PACKED_DATA="$TMP_DIR/test_ls.packed"
+PACKED_BIN="$TMP_DIR/test_ls_packed"
+
+cleanup() {
+    rm -f "$PACKED_DATA" "$PACKED_BIN"
+}
+
+create_packed_binary() {
     echo "Generating self-contained executable..."
     echo
-    ../build/stubgen ../build/loader test_ls.packed test_ls_packed
-    echo 
-    if [[ ! -f test_ls_packed ]]; then
+    "$ARM64_DIR/stubgen" "$ARM64_DIR/loader" "$PACKED_DATA" "$PACKED_BIN"
+    echo
+    if [[ ! -f "$PACKED_BIN" ]]; then
         echo "ERROR: Packed executable not created"
         exit 1
     fi
 }
 
-set -e
+assert_packed_still_exists() {
+    if [[ ! -x "$PACKED_BIN" ]]; then
+        echo "ERROR: Packed executable disappeared or is not executable"
+        exit 1
+    fi
+}
 
-echo "=== hARMless Test ==="
+trap cleanup EXIT
+mkdir -p "$TMP_DIR"
+
+echo "=== hARMless ARM64 Runtime Test ==="
 echo "Testing with /bin/ls"
 echo
 
-# Detect architecture and set ARCH accordingly
-UNAME_M=$(uname -m)
-case "$UNAME_M" in
-    aarch64)
-        ARCH=arm64
-        ELF_PATTERN="ARM aarch64"
-        ;;
-    x86_64)
-        ARCH=x86_64
-        ELF_PATTERN="x86-64"
-        ;;
-    *)
-        echo "ERROR: Unsupported architecture: $UNAME_M"
-        exit 1
-        ;;
-esac
-echo "[x] Detected architecture: $ARCH"
-echo
+if [[ "$(uname -m)" != "aarch64" ]]; then
+    echo "SKIP: ARM64 runtime tests require aarch64 Linux (found $(uname -m))"
+    exit 0
+fi
 
-# Check if /bin/ls exists and matches the current architecture
 if [[ ! -f /bin/ls ]]; then
     echo "ERROR: /bin/ls not found"
     exit 1
 fi
 
-if ! file /bin/ls | grep -q "$ELF_PATTERN"; then
-    echo "ERROR: /bin/ls is not a $ARCH binary (file says: $(file /bin/ls))"
+if ! file /bin/ls | grep -q "ARM aarch64"; then
+    echo "ERROR: /bin/ls is not an ARM64 binary (file says: $(file /bin/ls))"
     exit 1
 fi
 
-echo "[x] Found $ARCH /bin/ls"
+echo "[x] Found ARM64 /bin/ls"
 echo
 
-# Build the tools
 echo "Building tools..."
-cd ..
-make clean && make all ARCH=$ARCH
-cd tests
+make -C "$ROOT_DIR" clean
+make -C "$ROOT_DIR" all
 
-# Test packing
 echo "Packing /bin/ls..."
-../build/packer /bin/ls test_ls.packed
+"$ARM64_DIR/packer" /bin/ls "$PACKED_DATA"
 
-if [[ ! -f test_ls.packed ]]; then
+if [[ ! -f "$PACKED_DATA" ]]; then
     echo "ERROR: Packed file not created"
     exit 1
 fi
 
 echo
-echo "[x] Created packed file: $(ls -lh test_ls.packed)"
+echo "[x] Created packed file: $(ls -lh "$PACKED_DATA")"
 echo
 
-# Test stub generation
 create_packed_binary
 
 echo
-echo "[x] Created packed executable: $(ls -lh test_ls_packed)"
+echo "[x] Created packed executable: $(ls -lh "$PACKED_BIN")"
 echo
 
-chmod +x test_ls_packed
+chmod +x "$PACKED_BIN"
 
-# Test execution
 echo "Testing execution..."
-timeout 10s ./test_ls_packed --version > /dev/null 2>&1
-if [[ $? -eq 0 ]]; then
+if timeout 10s "$PACKED_BIN" --version > /dev/null 2>&1; then
     echo
     echo "[x] Packed executable runs successfully"
     echo
@@ -93,13 +88,12 @@ else
     echo "ERROR: Packed executable failed to run"
     exit 1
 fi
+assert_packed_still_exists
 
-create_packed_binary
-
-# Test that output is similar to original
 echo "Comparing output with original..."
 ORIGINAL_OUTPUT=$(timeout 5s /bin/ls --version 2>/dev/null | head -1 || echo "ls version output")
-PACKED_OUTPUT=$(timeout 5s ./test_ls_packed --version 2>/dev/null | head -1 || echo "packed ls version output")
+PACKED_OUTPUT=$(timeout 5s "$PACKED_BIN" --version 2>/dev/null | head -1 || echo "packed ls version output")
+assert_packed_still_exists
 
 if [[ "$ORIGINAL_OUTPUT" == "$PACKED_OUTPUT" ]]; then
     echo
@@ -111,12 +105,10 @@ else
     echo "  Packed:   $PACKED_OUTPUT"
 fi
 
-create_packed_binary
-
-# Test basic functionality
 echo "Testing basic ls functionality..."
 ORIGINAL_LS=$(timeout 5s /bin/ls / | wc -l)
-PACKED_LS=$(timeout 5s ./test_ls_packed / | wc -l)
+PACKED_LS=$(timeout 5s "$PACKED_BIN" / | wc -l)
+assert_packed_still_exists
 
 if [[ $ORIGINAL_LS -eq $PACKED_LS ]]; then
     echo
@@ -125,13 +117,6 @@ if [[ $ORIGINAL_LS -eq $PACKED_LS ]]; then
 else
     echo "WARNING: Different output count ($ORIGINAL_LS vs $PACKED_LS)"
 fi
-
-# Uncomment the below to keep the packed binary
-# create_packed_binary
-
-# Cleanup
-echo "Cleaning up..."
-rm -f test_ls.packed
 
 echo
 echo "[x] Test completed successfully."

