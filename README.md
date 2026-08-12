@@ -160,8 +160,21 @@ Validated on an ARM64 Linux server:
 - AES layer uses AES-256-CTR to preserve payload length for arbitrary ELF sizes.
 - Additional encryption layers remain ChaCha20 and RC4.
 - `stubgen` supports both ELF32 and ELF64 loaders.
+- Packed outputs are persistent by default: running a packed executable does not
+  remove the file from disk.
+- The loader preserves the original `argv[0]` by default so service scripts,
+  multicall binaries, and path-sensitive programs can restart normally.
+- Legacy one-shot behavior is opt-in at build time with `SELF_DELETE=1`.
+  `argv[0]` mutation is opt-in with `MASQUERADE_ARGV0=1`.
 - Packed outputs receive randomized magic, filler, padding, syscall-table
   re-keying, string-block re-keying, header blinding, and section-header strip.
+- The loader rejects inconsistent payload lengths and fails closed when file I/O
+  or OpenSSL transforms fail. The current crypto API uses signed `int` lengths,
+  so inputs larger than 2 GiB are rejected before packing.
+- This is obfuscation, not a privileged asset-confidentiality boundary: the
+  per-pack keys and decryption logic are shipped with the executable, and the
+  payload exists in memory before execution. High-value assets require an
+  external device-bound key and authenticated encryption in a future format.
 - Temporary test artifacts are written under `.codex_tmp`.
 
 ## Legal Notice

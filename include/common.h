@@ -403,8 +403,8 @@ static inline void debug_print(const char *msg) {
 uint32_t crc32(const uint8_t* data, size_t len);
 void generate_random_key(uint8_t* key, size_t key_size);
 int comprehensive_anti_debug_check();
-void multi_layer_encrypt(uint8_t* data, size_t len, const pack_header_t* header);
-void multi_layer_decrypt(uint8_t* data, size_t len, const pack_header_t* header);
+int multi_layer_encrypt(uint8_t* data, size_t len, const pack_header_t* header);
+int multi_layer_decrypt(uint8_t* data, size_t len, const pack_header_t* header);
 int execute_from_memory(const uint8_t* elf_data, size_t elf_size, char* const argv[], char* const envp[]);
 pack_header_t* find_packed_header(const uint8_t* data, size_t data_size);
 

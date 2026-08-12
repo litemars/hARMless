@@ -268,8 +268,10 @@ file "$INPUT_ARM64_ELF" | grep -q "ARM aarch64"
   - syscall-table re-keying
   - string-block re-keying
   - packed-header blinding
-- The packed executable self-deletes when run, so tests regenerate it before
-  each execution check.
+- The packed executable is persistent by default. Running it does not delete the
+  file from disk, and the loader preserves the original `argv[0]`.
+- Legacy one-shot self-delete is opt-in at build time with `SELF_DELETE=1`.
+  `argv[0]` mutation is opt-in with `MASQUERADE_ARGV0=1`.
 
 ## Boundaries
 

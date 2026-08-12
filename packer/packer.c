@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <limits.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -29,21 +30,18 @@ void generate_random_key(uint8_t* key, size_t key_size) {
     }
 }
 
-void multi_layer_encrypt(uint8_t* data, size_t len, const pack_header_t* header) {
+int multi_layer_encrypt(uint8_t* data, size_t len, const pack_header_t* header) {
     // Layer 1: AES-256
-    
-    aes256_encrypt(data, len, header->primary_key);
-    
+    if (aes256_encrypt(data, len, header->primary_key) != 0)
+        return -1;
 
     // Layer 2: ChaCha20
-    
-    chacha20_encrypt(data, len, header->secondary_key, header->nonce);
-    
+    if (chacha20_encrypt(data, len, header->secondary_key, header->nonce) != 0)
+        return -1;
 
     // Layer 3: RC4
-    
     rc4_encrypt_decrypt(header->tertiary_key, 32, data, data, len);
-    
+    return 0;
 }
 
 int is_elf64(const void* data) {
@@ -124,11 +122,27 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    fseek(input_fp, 0, SEEK_END);
-    size_t file_size = ftell(input_fp);
-    fseek(input_fp, 0, SEEK_SET);
+    if (fseek(input_fp, 0, SEEK_END) != 0) {
+        fprintf(stderr, "Error: Cannot seek input file '%s'\n", input_file);
+        fclose(input_fp);
+        return 1;
+    }
+    long file_size_long = ftell(input_fp);
+    if (file_size_long <= 0 ||
+        (unsigned long long)file_size_long > UINT32_MAX ||
+        (unsigned long long)file_size_long > INT_MAX) {
+        fprintf(stderr, "Error: Input file must be between 1 byte and 2 GiB\n");
+        fclose(input_fp);
+        return 1;
+    }
+    size_t file_size = (size_t)file_size_long;
+    if (fseek(input_fp, 0, SEEK_SET) != 0) {
+        fprintf(stderr, "Error: Cannot rewind input file '%s'\n", input_file);
+        fclose(input_fp);
+        return 1;
+    }
 
-    if (file_size == 0 || file_size > SIZE_MAX / 2) {
+    if (file_size > SIZE_MAX / 2) {
         fprintf(stderr, "Error: Input file is empty or too large\n");
         fclose(input_fp);
         return 1;
@@ -186,7 +200,14 @@ int main(int argc, char* argv[]) {
     generate_random_key(header.nonce, 16);
     generate_random_key(header.salt, 16);
 
-    multi_layer_encrypt(encrypted_data, file_size, &header);
+    if (multi_layer_encrypt(encrypted_data, file_size, &header) != 0) {
+        fprintf(stderr, "Error: encryption failed\n");
+        secure_memory_wipe(file_data, file_size);
+        secure_memory_wipe(encrypted_data, file_size);
+        free(file_data);
+        free(encrypted_data);
+        return 1;
+    }
 
     FILE* output_fp = fopen(output_file, "wb");
     if (!output_fp) {

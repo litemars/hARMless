@@ -142,6 +142,15 @@ Observed packed output:
 ELF 32-bit LSB executable, ARM, EABI5 version 1, statically linked, no section header
 ```
 
+Antminer L9 ARMHF cgminer format check from a read-only source input:
+
+```text
+Input : C:\Users\Administrator\Documents\Antminer\artifacts\cgminer\l9-aml-vnish-armhf\cgminer
+Output: .codex_tmp/antminer/l9-aml-cgminer-packed
+Result: ELF 32-bit LSB executable, ARM, EABI5 version 1 (GNU/Linux), statically linked, no section header
+Flags : Version5 EABI, hard-float ABI
+```
+
 ## qemu-user Note
 
 `qemu-arm` is useful for checking that an unprotected ARM32/EABI5 binary starts,
@@ -155,6 +164,13 @@ ARM64 Linux with 32-bit ARM compatibility for runtime acceptance.
 - ARM32/EABI5 support uses ELF32 symbol/section parsing in `stubgen`.
 - ARM32 loader uses ARM EABI direct syscalls.
 - ARM32 target disables the io_uring write path and uses the plain write path.
+- Packed executables are persistent by default. Running the packed `cgminer` or
+  another service binary does not delete the packed file from disk.
+- The loader preserves the original `argv[0]` by default. This is required for
+  service-managed or path-sensitive ARM32/EABI5 binaries.
+- Legacy self-delete is available only when the loader is explicitly rebuilt
+  with `SELF_DELETE=1`. `argv[0]` mutation is available only with
+  `MASQUERADE_ARGV0=1`; do not enable either for system service integration.
 - AES was changed to AES-256-CTR so encrypted payload size always matches the
   original ELF size across ARM32 and ARM64.
 

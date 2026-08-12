@@ -23,6 +23,13 @@ create_packed_binary() {
     fi
 }
 
+assert_packed_still_exists() {
+    if [[ ! -x "$PACKED_BIN" ]]; then
+        echo "ERROR: Packed executable disappeared or is not executable"
+        exit 1
+    fi
+}
+
 trap cleanup EXIT
 mkdir -p "$TMP_DIR"
 
@@ -81,12 +88,12 @@ else
     echo "ERROR: Packed executable failed to run"
     exit 1
 fi
-
-create_packed_binary
+assert_packed_still_exists
 
 echo "Comparing output with original..."
 ORIGINAL_OUTPUT=$(timeout 5s /bin/ls --version 2>/dev/null | head -1 || echo "ls version output")
 PACKED_OUTPUT=$(timeout 5s "$PACKED_BIN" --version 2>/dev/null | head -1 || echo "packed ls version output")
+assert_packed_still_exists
 
 if [[ "$ORIGINAL_OUTPUT" == "$PACKED_OUTPUT" ]]; then
     echo
@@ -98,11 +105,10 @@ else
     echo "  Packed:   $PACKED_OUTPUT"
 fi
 
-create_packed_binary
-
 echo "Testing basic ls functionality..."
 ORIGINAL_LS=$(timeout 5s /bin/ls / | wc -l)
 PACKED_LS=$(timeout 5s "$PACKED_BIN" / | wc -l)
+assert_packed_still_exists
 
 if [[ $ORIGINAL_LS -eq $PACKED_LS ]]; then
     echo

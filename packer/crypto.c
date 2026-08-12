@@ -179,45 +179,57 @@ void rc4_encrypt_decrypt(const uint8_t* key, size_t key_len, const uint8_t* inpu
 
 // OpenSSL-based AES-256 in CTR mode. CTR preserves the input length for
 // arbitrary ELF sizes; EVP's padded ECB mode would require storing padding.
-void aes256_encrypt(uint8_t* data, size_t len, const uint8_t* key) {
+int aes256_encrypt(uint8_t* data, size_t len, const uint8_t* key) {
+    if ((!data && len != 0) || !key) return -1;
+    if (len == 0) return 0;
+
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) return;
+    if (!ctx) return -1;
 
     uint8_t iv[16] = {0};
     if (EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), NULL, key, iv) != 1) {
         EVP_CIPHER_CTX_free(ctx);
-        return;
+        return -1;
     }
 
     int out_len;
     uint8_t* output = malloc(len);
     if (!output) {
         EVP_CIPHER_CTX_free(ctx);
-        return;
+        return -1;
     }
 
     if (EVP_EncryptUpdate(ctx, output, &out_len, data, len) != 1) {
         free(output);
         EVP_CIPHER_CTX_free(ctx);
-        return;
+        return -1;
     }
 
     int final_len;
-    EVP_EncryptFinal_ex(ctx, output + out_len, &final_len);
+    if (EVP_EncryptFinal_ex(ctx, output + out_len, &final_len) != 1 ||
+        (size_t)(out_len + final_len) != len) {
+        free(output);
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
 
     memcpy(data, output, len);
     free(output);
     EVP_CIPHER_CTX_free(ctx);
+    return 0;
 }
 
-void aes256_decrypt(uint8_t* data, size_t len, const uint8_t* key) {
-    aes256_encrypt(data, len, key);
+int aes256_decrypt(uint8_t* data, size_t len, const uint8_t* key) {
+    return aes256_encrypt(data, len, key);
 }
 
 // OpenSSL-based ChaCha20
-void chacha20_encrypt(uint8_t* data, size_t len, const uint8_t* key, const uint8_t* nonce) {
+int chacha20_encrypt(uint8_t* data, size_t len, const uint8_t* key, const uint8_t* nonce) {
+    if ((!data && len != 0) || !key || !nonce) return -1;
+    if (len == 0) return 0;
+
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) return;
+    if (!ctx) return -1;
 
     // ChaCha20 uses 32-byte key, 16-byte IV (nonce + counter)
     uint8_t iv[16] = {0};
@@ -225,28 +237,37 @@ void chacha20_encrypt(uint8_t* data, size_t len, const uint8_t* key, const uint8
 
     if (EVP_EncryptInit_ex(ctx, EVP_chacha20(), NULL, key, iv) != 1) {
         EVP_CIPHER_CTX_free(ctx);
-        return;
+        return -1;
     }
 
     int out_len;
     uint8_t* output = malloc(len);
     if (!output) {
         EVP_CIPHER_CTX_free(ctx);
-        return;
+        return -1;
     }
 
     if (EVP_EncryptUpdate(ctx, output, &out_len, data, len) != 1) {
         free(output);
         EVP_CIPHER_CTX_free(ctx);
-        return;
+        return -1;
+    }
+
+    int final_len;
+    if (EVP_EncryptFinal_ex(ctx, output + out_len, &final_len) != 1 ||
+        (size_t)(out_len + final_len) != len) {
+        free(output);
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
     }
 
     memcpy(data, output, len);
     free(output);
     EVP_CIPHER_CTX_free(ctx);
+    return 0;
 }
 
-void chacha20_decrypt(uint8_t* data, size_t len, const uint8_t* key, const uint8_t* nonce) {
+int chacha20_decrypt(uint8_t* data, size_t len, const uint8_t* key, const uint8_t* nonce) {
     // ChaCha20 is symmetric
-    chacha20_encrypt(data, len, key, nonce);
+    return chacha20_encrypt(data, len, key, nonce);
 }
