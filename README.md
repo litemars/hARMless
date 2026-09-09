@@ -203,7 +203,7 @@ Every invocation of `stubgen` produces a bytewise-unique packed binary, even whe
 | Random filler | 256-byte `g_pack_polymorph` array in `.data` overwritten with random bytes |
 | Random padding | 0–4095 bytes of random junk inserted between loader stub and payload |
 | SC table re-keying | `hARMless_sc[]` re-encoded with a fresh random `g_sc_xor_key` so syscall numbers differ in every binary |
-| String block re-keying | All 241 obfuscated string bytes in `g_obf_str_block` re-encoded with a fresh random `g_str_xor_key` |
+| String block re-keying | All 231 obfuscated string bytes in `g_obf_str_block` re-encoded with a fresh random `g_str_xor_key` |
 | Header OTP blinding | Pack header body (140 bytes) XOR'd with the first 140 bytes of `g_pack_polymorph` as a one-time pad |
 | Symbol scrub | `.symtab`/`.strtab` sections overwritten with random data; ELF section header fields zeroed |
 

@@ -31,7 +31,6 @@ static const struct { size_t off; size_t len; } hyper_names[] = {
 };
 
 static const struct { size_t off; size_t len; } env_names[] = {
-    { STR_OFF_LD_PRELOAD,   STR_LEN_LD_PRELOAD   },
     { STR_OFF_GDB_ENV,      STR_LEN_GDB_ENV      },
     { STR_OFF_PTRACE_SCOPE, STR_LEN_PTRACE_SCOPE },
     { STR_OFF_STRACE_LOG,   STR_LEN_STRACE_LOG   },
