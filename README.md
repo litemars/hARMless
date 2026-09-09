@@ -24,7 +24,7 @@ A comprehensive security research tool that encrypts ARM64 or x86-64 ELF executa
 - **Core Dump Prevention**: Prevents memory dumps using `setrlimit`
 - **Secure Memory Wiping**: Multi-pass memory erasure for sensitive data
 - **Direct Syscalls**: Bypasses userland hooks for enhanced stealth
-- **Optional Self-Deletion**: Deletes the packed launcher by default, or keeps it with `SELF_DELETE=0`
+- **Optional Self-Deletion**: Deletes the packed launcher by default or keeps it with `SELF_DELETE=0`
 - **Polymorphic Loader**: Every packed binary is bytewise unique — randomized magic, filler, padding, and symbol table scrubbing at stub-generation time
 
 ---
@@ -152,8 +152,8 @@ make pack INPUT=your_arm64_binary OUTPUT=packed_binary
 ```bash
 # Testing using /bin/ls
 
-make test SELF_DELETE=1
-make test SELF_DELETE=0
+make test
+# Output: packed_binary: packed_ls
 
 ```
 
@@ -221,7 +221,7 @@ All anti-debug and process-masquerade strings (tool names, hypervisor signatures
 
 - **Secure Wiping**: 3-pass overwrite (zeros, ones, random) with volatile access to prevent compiler optimization
 - **No Disk Writes**: Original binary never touches filesystem
-- **Self-Deletion**: Loader calls `unlink()` before executing the payload unless built with `SELF_DELETE=0`
+- **Self-Deletion**: Loader calls `unlink()` on itself before executing the payload
 - **ASLR Compatible**: Position-independent code; random address slot reserved via `mmap(NULL)` before execution
 
 ---

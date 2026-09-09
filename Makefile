@@ -133,8 +133,8 @@ clean:
 
 test:
 	@echo "Running tests..."
-	@if [ -f tests/unit_test.sh ]; then \
-		cd tests && SELF_DELETE=$(SELF_DELETE) bash ./unit_test.sh; \
+	@if [ -x tests/unit_test.sh ]; then \
+		cd tests && ./unit_test.sh; \
 	else \
 		echo "No tests found: tests/unit_test.sh"; \
 		exit 1; \
