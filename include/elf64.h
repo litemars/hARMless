@@ -104,6 +104,7 @@ typedef struct {
 #define SHT_SYMTAB   2
 #define SHT_STRTAB   3
 #define SHT_NOBITS   8
+#define SHF_ALLOC    0x2
 
 // ELF64 symbol table entry
 typedef struct {

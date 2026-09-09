@@ -335,6 +335,7 @@ int main(int argc, char* argv[]) {
     {
         Elf64_Shdr* sections = (Elf64_Shdr*)(loader_data + ehdr->e_shoff);
         for (size_t i = 0; i < ehdr->e_shnum; i++) {
+            if (sections[i].sh_flags & SHF_ALLOC) continue;
             if (sections[i].sh_type != SHT_SYMTAB &&
                 sections[i].sh_type != SHT_STRTAB) continue;
             if (sections[i].sh_offset > loader_size) continue;

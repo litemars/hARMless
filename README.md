@@ -20,7 +20,7 @@ A comprehensive security research tool that encrypts ARM64 or x86-64 ELF executa
 - **Memory Execution**: Runtime decryption and execution entirely in memory using `memfd_create`
 - **Code Obfuscation**: Advanced obfuscation techniques for anti-analysis
 - **CRC32 Verification**: Integrity checking to detect tampering
-- **Self-Contained**: Packed binaries are completely standalone
+- **Embedded Payload**: Packed binaries contain the complete original executable; the default loader uses the target system's `libcrypto` (use `STATIC=1` for a standalone loader)
 - **Core Dump Prevention**: Prevents memory dumps using `setrlimit`
 - **Secure Memory Wiping**: Multi-pass memory erasure for sensitive data
 - **Direct Syscalls**: Bypasses userland hooks for enhanced stealth
@@ -56,9 +56,10 @@ make pack INPUT=/bin/ls OUTPUT=packed_ls
 ### Prerequisites
 
 - **Linux system** (ARM64 or x86-64) or a cross-compilation toolchain
-- **GCC** — native or the appropriate cross-compiler (see table below)
+- **C compiler** — native `cc`/Clang/GCC or the appropriate cross-compiler (see table below)
 - **Make**
-- **OpenSSL** (`libssl-dev`) — required for AES-256 and ChaCha20 via the EVP API
+- **OpenSSL development files** (`libssl-dev` on Debian/Ubuntu, `openssl-devel` on RHEL/AlmaLinux, or `openssl` on Termux) — required for AES-256 and ChaCha20 via the EVP API
+- **pkg-config** (`pkgconf-pkg-config` on RHEL/AlmaLinux; recommended for locating OpenSSL outside standard paths)
 - **Standard development tools** (`git`, `build-essential`)
 
 | Host → Target | Compiler needed |
@@ -81,6 +82,9 @@ make all
 # 2b. Build for x86-64
 make all ARCH=x86_64
 
+# Optional: build a fully static loader (requires static libcrypto and libc)
+make clean && make all ARCH=x86_64 STATIC=1
+
 # This creates:
 # - build/packer    : Binary packer  (validates ELF machine type for chosen ARCH)
 # - build/loader    : Stub loader    (compiled for the chosen ARCH)
@@ -102,6 +106,11 @@ make all ARCH=x86_64
 make install-deps ARCH=x86_64
 make all ARCH=x86_64
 ```
+
+For a cross-build, `TARGET_PKG_CONFIG` must resolve the target architecture's
+`libcrypto`, not the host library. Set it to a cross-aware wrapper or configure
+its sysroot, for example `TARGET_PKG_CONFIG=aarch64-linux-gnu-pkg-config` when
+that wrapper is available.
 
 ---
 
@@ -152,7 +161,7 @@ make test
 
 The packer uses a **triple-layer encryption** approach:
 
-1. **AES-256-ECB**: First encryption pass (OpenSSL EVP)
+1. **AES-256-ECB**: First pass over complete 16-byte blocks; a final partial block remains covered by the two stream-cipher layers (OpenSSL EVP)
 2. **ChaCha20**: Modern stream cipher for additional security (OpenSSL EVP)
 3. **RC4 Stream Cipher**: Final obfuscation layer
 
@@ -165,13 +174,18 @@ Original Binary → AES-256 → ChaCha20 → RC4 → Packed Data
 
 ### In-Memory Write Paths
 
-Three selectable methods for writing the decrypted ELF into the memfd (chosen at compile time):
+Three selectable methods for writing the decrypted ELF into the memfd (chosen with `COPY_METHOD=<method>` at build time):
 
 | Method | Flag | Kernel Requirement |
 |--------|------|--------------------|
-| `io_uring` (default) | `-DCOPY_WITH_IO_URING` | ≥ 5.1 |
-| `mmap` | `-DCOPY_WITH_MMAP` | Any |
-| `write(2)` | (neither flag) | Any |
+| `write(2)` (default) | `COPY_METHOD=write` | Any |
+| `mmap` | `COPY_METHOD=mmap` | Any |
+| `io_uring` | `COPY_METHOD=io_uring` | ≥ 5.1 with io_uring enabled |
+
+The default build links the loader dynamically so it works with the ordinary
+OpenSSL development packages shipped by RHEL, AlmaLinux, Debian, and Termux.
+Use `STATIC=1` only when the target's static `libcrypto` and libc archives are
+installed. Run `make clean` when switching `STATIC` or `COPY_METHOD` modes.
 
 ### Polymorphic Engine
 
@@ -317,4 +331,3 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for gui
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
-

