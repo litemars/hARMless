@@ -1,6 +1,8 @@
 # Compiler detection
 UNAME_M := $(shell uname -m)
-CC      := gcc
+CC      ?= cc
+PKG_CONFIG ?= pkg-config
+TARGET_PKG_CONFIG ?= $(PKG_CONFIG)
 
 # Target architecture: defaults to host arch, override with ARCH=arm64 or ARCH=x86_64
 ifeq ($(UNAME_M), x86_64)
@@ -13,31 +15,61 @@ endif
 
 ifeq ($(ARCH), x86_64)
     ifeq ($(UNAME_M), x86_64)
-        TARGET_CC := gcc                     # native x86-64 build
+        TARGET_CC ?= $(CC)                   # native x86-64 build
     else
-        TARGET_CC := x86_64-linux-gnu-gcc    # cross-compile from ARM64
+        TARGET_CC ?= x86_64-linux-gnu-gcc    # cross-compile from ARM64
     endif
     TARGET_ARCH_FLAGS := -DTARGET_X86_64
 else ifeq ($(ARCH), arm64)
     ifeq ($(UNAME_M), x86_64)
-        TARGET_CC := aarch64-linux-gnu-gcc   # cross-compile from x86-64
+        TARGET_CC ?= aarch64-linux-gnu-gcc   # cross-compile from x86-64
     else
-        TARGET_CC := gcc                     # native ARM64 build
+        TARGET_CC ?= $(CC)                   # native ARM64 build
     endif
     TARGET_ARCH_FLAGS := -DTARGET_ARM64
 else
     $(error Unknown ARCH '$(ARCH)'. Use ARCH=arm64 or ARCH=x86_64)
 endif
 
-# Compiler flags
-CFLAGS := -Wall -Wextra -O2 -std=c99
-# Write method: choose one of -DCOPY_WITH_MMAP, -DCOPY_WITH_IO_URING, or neither (plain write syscall)
-TARGET_CFLAGS := -Wall -Wextra -O2 -std=c99 -static -DCOPY_WITH_IO_URING
-LDFLAGS := -static
+# Compiler and linker flags
+CFLAGS ?= -Wall -Wextra -O2 -std=c99
+TARGET_CFLAGS ?= -Wall -Wextra -O2 -std=c99
+LDFLAGS ?=
+LDLIBS ?=
 
-# OpenSSL flags - prefer shared libraries to avoid static linking warnings
-OPENSSL_CFLAGS := $(shell pkg-config --cflags openssl 2>/dev/null || echo "")
-OPENSSL_LDFLAGS := $(shell pkg-config --libs openssl 2>/dev/null || echo "-lssl -lcrypto")
+COPY_METHOD ?= io_uring
+ifeq ($(COPY_METHOD),write)
+    COPY_FLAGS :=
+else ifeq ($(COPY_METHOD),mmap)
+    COPY_FLAGS := -DCOPY_WITH_MMAP
+else ifeq ($(COPY_METHOD),io_uring)
+    COPY_FLAGS := -DCOPY_WITH_IO_URING
+else
+    $(error Unknown COPY_METHOD '$(COPY_METHOD)'. Use write, mmap, or io_uring)
+endif
+
+SELF_DELETE ?= 1
+ifeq ($(SELF_DELETE),1)
+    SELF_DELETE_FLAGS :=
+else ifeq ($(SELF_DELETE),0)
+    SELF_DELETE_FLAGS := -DKEEP_PACKED_FILE
+else
+    $(error Unknown SELF_DELETE value '$(SELF_DELETE)'. Use 0 or 1)
+endif
+LOADER_FEATURE_FLAGS := $(COPY_FLAGS) $(SELF_DELETE_FLAGS)
+
+STATIC ?= 0
+OPENSSL_CFLAGS := $(shell $(PKG_CONFIG) --cflags libcrypto 2>/dev/null || echo "")
+OPENSSL_LIBS := $(shell $(PKG_CONFIG) --libs libcrypto 2>/dev/null || echo "-lcrypto")
+LOADER_OPENSSL_CFLAGS := $(shell $(TARGET_PKG_CONFIG) --cflags libcrypto 2>/dev/null || echo "")
+LOADER_LDFLAGS := $(LDFLAGS)
+LOADER_OPENSSL_LIBS := $(shell $(TARGET_PKG_CONFIG) --libs libcrypto 2>/dev/null || echo "-lcrypto")
+ifeq ($(STATIC),1)
+    LOADER_LDFLAGS += -static
+    LOADER_OPENSSL_LIBS := $(shell $(TARGET_PKG_CONFIG) --static --libs libcrypto 2>/dev/null || echo "-lcrypto")
+else ifneq ($(STATIC),0)
+    $(error Unknown STATIC value '$(STATIC)'. Use 0 or 1)
+endif
 
 # Security flags
 SECURITY_FLAGS := -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE
@@ -73,15 +105,15 @@ $(BUILD_DIR):
 
 # Build packer
 $(PACKER_BIN): $(PACKER_SOURCES)
-	$(CC) $(CFLAGS) $(SECURITY_FLAGS) $(TARGET_ARCH_FLAGS) $(OPENSSL_CFLAGS) $(INCLUDES) -o $@ $^ $(OPENSSL_LDFLAGS)
+	$(CC) $(CFLAGS) $(SECURITY_FLAGS) $(TARGET_ARCH_FLAGS) $(OPENSSL_CFLAGS) $(INCLUDES) $(LDFLAGS) -o $@ $^ $(OPENSSL_LIBS) $(LDLIBS)
 
 # Build loader
 $(LOADER_BIN): $(LOADER_SOURCES)
-	$(TARGET_CC) $(TARGET_CFLAGS) $(STEALTH_FLAGS) $(TARGET_ARCH_FLAGS) $(OPENSSL_CFLAGS) $(INCLUDES) -o $@ $^ $(OPENSSL_LDFLAGS) 2>/dev/null || $(TARGET_CC) $(TARGET_CFLAGS) $(STEALTH_FLAGS) $(TARGET_ARCH_FLAGS) $(OPENSSL_CFLAGS) $(INCLUDES) -o $@ $^ $(OPENSSL_LDFLAGS) -lzstd -lz
+	$(TARGET_CC) $(TARGET_CFLAGS) $(LOADER_FEATURE_FLAGS) $(STEALTH_FLAGS) $(TARGET_ARCH_FLAGS) $(LOADER_OPENSSL_CFLAGS) $(INCLUDES) $(LOADER_LDFLAGS) -o $@ $^ $(LOADER_OPENSSL_LIBS) $(LDLIBS)
 
 # Build stub generator
 $(STUBGEN_BIN): $(STUBGEN_SOURCES)
-	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^ $(LDFLAGS)
+	$(CC) $(CFLAGS) $(INCLUDES) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 # Advanced packing presets
 pack: $(PACKER_BIN) $(LOADER_BIN) $(STUBGEN_BIN)
@@ -111,19 +143,21 @@ test:
 # Install dependencies
 install-deps:
 	@echo "Installing cross-compilation and OpenSSL dependencies for ARCH=$(ARCH)..."
-	@if command -v apt-get >/dev/null 2>&1; then \
+	@if [ -n "$$TERMUX_VERSION" ] && command -v pkg >/dev/null 2>&1; then \
+		pkg install -y clang make pkg-config openssl file; \
+	elif command -v apt-get >/dev/null 2>&1; then \
 		sudo apt-get update && \
 		if [ "$(ARCH)" = "x86_64" ] && [ "$(UNAME_M)" != "x86_64" ]; then \
-			sudo apt-get install -y gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu libssl-dev; \
+			sudo apt-get install -y gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu libssl-dev pkg-config file; \
 		elif [ "$(ARCH)" = "arm64" ] && [ "$(UNAME_M)" = "x86_64" ]; then \
-			sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libssl-dev; \
+			sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu libssl-dev pkg-config file; \
 		else \
-			sudo apt-get install -y gcc libssl-dev; \
+			sudo apt-get install -y gcc libssl-dev pkg-config file; \
 		fi; \
 	elif command -v yum >/dev/null 2>&1; then \
-		sudo yum install -y gcc openssl-devel; \
+		sudo yum install -y gcc openssl-devel pkgconf-pkg-config file; \
 	elif command -v pacman >/dev/null 2>&1; then \
-		sudo pacman -S gcc openssl; \
+		sudo pacman -S gcc openssl pkgconf file; \
 	else \
 		echo "Please install cross-compilation and OpenSSL tools manually"; \
 	fi
