@@ -47,7 +47,16 @@ else ifeq ($(COPY_METHOD),io_uring)
 else
     $(error Unknown COPY_METHOD '$(COPY_METHOD)'. Use write, mmap, or io_uring)
 endif
-TARGET_CFLAGS += $(COPY_FLAGS)
+
+SELF_DELETE ?= 1
+ifeq ($(SELF_DELETE),1)
+    SELF_DELETE_FLAGS :=
+else ifeq ($(SELF_DELETE),0)
+    SELF_DELETE_FLAGS := -DKEEP_PACKED_FILE
+else
+    $(error Unknown SELF_DELETE value '$(SELF_DELETE)'. Use 0 or 1)
+endif
+LOADER_FEATURE_FLAGS := $(COPY_FLAGS) $(SELF_DELETE_FLAGS)
 
 STATIC ?= 0
 OPENSSL_CFLAGS := $(shell $(PKG_CONFIG) --cflags libcrypto 2>/dev/null || echo "")
@@ -100,7 +109,7 @@ $(PACKER_BIN): $(PACKER_SOURCES)
 
 # Build loader
 $(LOADER_BIN): $(LOADER_SOURCES)
-	$(TARGET_CC) $(TARGET_CFLAGS) $(STEALTH_FLAGS) $(TARGET_ARCH_FLAGS) $(LOADER_OPENSSL_CFLAGS) $(INCLUDES) $(LOADER_LDFLAGS) -o $@ $^ $(LOADER_OPENSSL_LIBS) $(LDLIBS)
+	$(TARGET_CC) $(TARGET_CFLAGS) $(LOADER_FEATURE_FLAGS) $(STEALTH_FLAGS) $(TARGET_ARCH_FLAGS) $(LOADER_OPENSSL_CFLAGS) $(INCLUDES) $(LOADER_LDFLAGS) -o $@ $^ $(LOADER_OPENSSL_LIBS) $(LDLIBS)
 
 # Build stub generator
 $(STUBGEN_BIN): $(STUBGEN_SOURCES)
@@ -124,8 +133,8 @@ clean:
 
 test:
 	@echo "Running tests..."
-	@if [ -x tests/unit_test.sh ]; then \
-		cd tests && ./unit_test.sh; \
+	@if [ -f tests/unit_test.sh ]; then \
+		cd tests && SELF_DELETE=$(SELF_DELETE) bash ./unit_test.sh; \
 	else \
 		echo "No tests found: tests/unit_test.sh"; \
 		exit 1; \

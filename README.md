@@ -24,6 +24,7 @@ A comprehensive security research tool that encrypts ARM64 or x86-64 ELF executa
 - **Core Dump Prevention**: Prevents memory dumps using `setrlimit`
 - **Secure Memory Wiping**: Multi-pass memory erasure for sensitive data
 - **Direct Syscalls**: Bypasses userland hooks for enhanced stealth
+- **Optional Self-Deletion**: Deletes the packed launcher by default, or keeps it with `SELF_DELETE=0`
 - **Polymorphic Loader**: Every packed binary is bytewise unique — randomized magic, filler, padding, and symbol table scrubbing at stub-generation time
 
 ---
@@ -85,6 +86,9 @@ make all ARCH=x86_64
 # Optional: build a fully static loader (requires static libcrypto and libc)
 make clean && make all ARCH=x86_64 STATIC=1
 
+# Optional: keep the packed launcher after it runs
+make clean && make all ARCH=x86_64 SELF_DELETE=0
+
 # This creates:
 # - build/packer    : Binary packer  (validates ELF machine type for chosen ARCH)
 # - build/loader    : Stub loader    (compiled for the chosen ARCH)
@@ -139,7 +143,7 @@ make pack INPUT=your_arm64_binary OUTPUT=packed_binary
 # 3. Decrypt the original ELF in memory
 # 4. Verify integrity with CRC32
 # 5. Create a masqueraded memfd and write the ELF into it
-# 6. Delete itself from disk (unlink)
+# 6. Delete itself from disk when self-deletion is enabled (the default)
 # 7. Execute directly from memory via /proc/self/fd/<memfd>
 ```
 
@@ -148,8 +152,8 @@ make pack INPUT=your_arm64_binary OUTPUT=packed_binary
 ```bash
 # Testing using /bin/ls
 
-make test
-# Output: packed_binary: packed_ls
+make test SELF_DELETE=1
+make test SELF_DELETE=0
 
 ```
 
@@ -185,7 +189,9 @@ Three selectable methods for writing the decrypted ELF into the memfd (chosen wi
 The default build links the loader dynamically so it works with the ordinary
 OpenSSL development packages shipped by RHEL, AlmaLinux, Debian, and Termux.
 Use `STATIC=1` only when the target's static `libcrypto` and libc archives are
-installed. Run `make clean` when switching `STATIC` or `COPY_METHOD` modes.
+installed. Self-deletion is enabled by default; build with `SELF_DELETE=0` to
+keep the packed launcher on disk after execution. Run `make clean` when
+switching `STATIC`, `COPY_METHOD`, or `SELF_DELETE` modes.
 
 ### Polymorphic Engine
 
@@ -215,7 +221,7 @@ All anti-debug and process-masquerade strings (tool names, hypervisor signatures
 
 - **Secure Wiping**: 3-pass overwrite (zeros, ones, random) with volatile access to prevent compiler optimization
 - **No Disk Writes**: Original binary never touches filesystem
-- **Self-Deletion**: Loader calls `unlink()` on itself before executing the payload
+- **Self-Deletion**: Loader calls `unlink()` before executing the payload unless built with `SELF_DELETE=0`
 - **ASLR Compatible**: Position-independent code; random address slot reserved via `mmap(NULL)` before execution
 
 ---

