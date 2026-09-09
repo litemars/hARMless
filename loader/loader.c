@@ -177,20 +177,24 @@ int check_debug_environment(void) {
 
 int comprehensive_anti_debug_check() {
 
-    // This logic can be expanded
     if (detect_ptrace()) {
+        DBG("ptrace detected\n");
         return 1;
     }
     if (check_proc_status()) {
+        DBG("TracerPid detected\n");
         return 1;
     }
     if (check_parent_process()) {
+        DBG("debugger parent process detected\n");
         return 1;
     }
     if (detect_virtualization()) {
+        DBG("virtualization detected\n");
         return 1;
     }
     if (check_debug_environment()) {
+        DBG("debug environment variable detected\n");
         return 1;
     }
 
