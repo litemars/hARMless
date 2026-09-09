@@ -7,6 +7,7 @@
 #include <sys/prctl.h>
 #include <time.h>
 #include <errno.h>
+#include <limits.h>
 #include "common.h"
 #include "elf64.h"
 #include "crypto.h"
@@ -202,14 +203,15 @@ int comprehensive_anti_debug_check() {
 }
 
 
-void multi_layer_decrypt(uint8_t* data, size_t len, const pack_header_t* header) {
-    
-    rc4_encrypt_decrypt(header->tertiary_key, 32, data, data, len);
-    
-    chacha20_decrypt(data, len, header->secondary_key, header->nonce);
+int multi_layer_decrypt(uint8_t* data, size_t len, const pack_header_t* header) {
+    if (!data || !header || len > INT_MAX) return 0;
 
-    aes256_decrypt(data, len, header->primary_key);
-    
+    rc4_encrypt_decrypt(header->tertiary_key, 32, data, data, len);
+
+    if (!chacha20_decrypt(data, len, header->secondary_key, header->nonce))
+        return 0;
+    if (!aes256_decrypt(data, len, header->primary_key)) return 0;
+    return 1;
 }
 
 pack_header_t* find_packed_header(const uint8_t* data, size_t data_size) {
@@ -330,7 +332,14 @@ int main(int argc, char* argv[], char* envp[]) {
 
     memcpy(decrypted_data, encrypted_data, header->original_size);
 
-    multi_layer_decrypt(decrypted_data, header->original_size, header);
+    if (!multi_layer_decrypt(decrypted_data, header->original_size, header)) {
+        DBG("payload decryption failed\n");
+        secure_memory_wipe(decrypted_data, header->original_size);
+        secure_memory_wipe(self_data, self_size);
+        free(decrypted_data);
+        free(self_data);
+        return 1;
+    }
     calculated_crc = crc32(decrypted_data, header->original_size);
     if (calculated_crc != header->crc32) {
         DBG("decrypted payload CRC mismatch\n");
