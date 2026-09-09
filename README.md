@@ -182,9 +182,9 @@ Three selectable methods for writing the decrypted ELF into the memfd (chosen wi
 
 | Method | Flag | Kernel Requirement |
 |--------|------|--------------------|
-| `write(2)` (default) | `COPY_METHOD=write` | Any |
+| `write(2)` | `COPY_METHOD=write` | Any |
 | `mmap` | `COPY_METHOD=mmap` | Any |
-| `io_uring` | `COPY_METHOD=io_uring` | ≥ 5.1 with io_uring enabled |
+| `io_uring`(default)  | `COPY_METHOD=io_uring` | ≥ 5.1 with io_uring enabled |
 
 The default build links the loader dynamically so it works with the ordinary
 OpenSSL development packages shipped by RHEL, AlmaLinux, Debian, and Termux.

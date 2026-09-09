@@ -37,7 +37,7 @@ TARGET_CFLAGS ?= -Wall -Wextra -O2 -std=c99
 LDFLAGS ?=
 LDLIBS ?=
 
-COPY_METHOD ?= write
+COPY_METHOD ?= io_uring
 ifeq ($(COPY_METHOD),write)
     COPY_FLAGS :=
 else ifeq ($(COPY_METHOD),mmap)
