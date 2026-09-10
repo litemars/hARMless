@@ -177,6 +177,9 @@ int check_debug_environment(void) {
 }
 
 int comprehensive_anti_debug_check() {
+    #ifdef DISABLE_ANTI_DEBUG
+    return 0;
+    #else
 
     if (detect_ptrace()) {
         DBG("ptrace detected\n");
@@ -200,6 +203,7 @@ int comprehensive_anti_debug_check() {
     }
 
     return 0;
+    #endif
 }
 
 

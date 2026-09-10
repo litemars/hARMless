@@ -56,7 +56,17 @@ else ifeq ($(SELF_DELETE),0)
 else
     $(error Unknown SELF_DELETE value '$(SELF_DELETE)'. Use 0 or 1)
 endif
-LOADER_FEATURE_FLAGS := $(COPY_FLAGS) $(SELF_DELETE_FLAGS)
+
+ANTI_DEBUG ?= 1
+ifeq ($(ANTI_DEBUG),1)
+    ANTI_DEBUG_FLAGS :=
+else ifeq ($(ANTI_DEBUG),0)
+    ANTI_DEBUG_FLAGS := -DDISABLE_ANTI_DEBUG
+else
+    $(error Unknown ANTI_DEBUG value '$(ANTI_DEBUG)'. Use 0 or 1)
+endif
+
+LOADER_FEATURE_FLAGS := $(COPY_FLAGS) $(SELF_DELETE_FLAGS) $(ANTI_DEBUG_FLAGS)
 
 STATIC ?= 0
 OPENSSL_CFLAGS := $(shell $(PKG_CONFIG) --cflags libcrypto 2>/dev/null || echo "")
