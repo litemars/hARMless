@@ -233,8 +233,13 @@ int execute_from_memory(const uint8_t* elf_data, size_t elf_size, char* const ar
     noise_delay(80);
     DBG("executing from memory via memfd: %s\n", memfd_path);
     // Execute using direct syscall
-    syscall3(__NR_execve, (long)memfd_path, (long)argv, (long)envp);
-    DBG("execve failed: %s\n", strerror(errno));
+    long exec_result = syscall3(__NR_execve, (long)memfd_path, (long)argv, (long)envp);
+    if (exec_result < 0) {
+        DBG("execve failed: raw return %ld (%s)\n",
+            exec_result, strerror((int)-exec_result));
+    } else {
+        DBG("execve unexpectedly returned: %ld\n", exec_result);
+    }
     // Cleanup on execve failure
     syscall2(__NR_munmap, (long)randomized_base, elf_size);
     syscall1(__NR_close, memfd);

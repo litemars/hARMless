@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <time.h>
 #include <errno.h>
 
@@ -324,9 +325,33 @@ static inline void debug_print(const char *msg) {
     while (msg[len]) len++;
     syscall3(__NR_write, 2, (long)msg, (long)len);
 }
-#define DBG(msg) debug_print("[hARMless] " msg)
+
+static inline void debug_printf(const char *format, ...) {
+    char buffer[512];
+    static const char prefix[] = "[hARMless] ";
+    const size_t prefix_len = sizeof(prefix) - 1;
+
+    memcpy(buffer, prefix, prefix_len);
+
+    va_list args;
+    va_start(args, format);
+    int result = vsnprintf(buffer + prefix_len,
+                           sizeof(buffer) - prefix_len,
+                           format, args);
+    va_end(args);
+
+    if (result < 0) return;
+
+    size_t message_len = (size_t)result;
+    if (message_len >= sizeof(buffer) - prefix_len)
+        message_len = sizeof(buffer) - prefix_len - 1;
+
+    syscall3(__NR_write, 2, (long)buffer, (long)(prefix_len + message_len));
+}
+
+#define DBG(...) debug_printf(__VA_ARGS__)
 #else
-#define DBG(msg) ((void)0)
+#define DBG(...) ((void)0)
 #endif
 
 // Function prototypes
