@@ -29,21 +29,23 @@ void generate_random_key(uint8_t* key, size_t key_size) {
     }
 }
 
-void multi_layer_encrypt(uint8_t* data, size_t len, const pack_header_t* header) {
+int multi_layer_encrypt(uint8_t* data, size_t len, const pack_header_t* header) {
+    if (!data || !header) return 0;
+
     // Layer 1: AES-256
-    
-    aes256_encrypt(data, len, header->primary_key);
+    if (!aes256_encrypt(data, len, header->primary_key)) return 0;
     
 
     // Layer 2: ChaCha20
     
-    chacha20_encrypt(data, len, header->secondary_key, header->nonce);
+    if (!chacha20_encrypt(data, len, header->secondary_key, header->nonce))
+        return 0;
     
 
     // Layer 3: RC4
     
     rc4_encrypt_decrypt(header->tertiary_key, 32, data, data, len);
-    
+    return 1;
 }
 
 int is_elf64(const void* data) {
@@ -168,7 +170,14 @@ int main(int argc, char* argv[]) {
     generate_random_key(header.nonce, 16);
     generate_random_key(header.salt, 16);
 
-    multi_layer_encrypt(encrypted_data, file_size, &header);
+    if (!multi_layer_encrypt(encrypted_data, file_size, &header)) {
+        fprintf(stderr, "Error: Encryption failed\n");
+        secure_memory_wipe(file_data, file_size);
+        secure_memory_wipe(encrypted_data, file_size);
+        free(file_data);
+        free(encrypted_data);
+        return 1;
+    }
 
     FILE* output_fp = fopen(output_file, "wb");
     if (!output_fp) {

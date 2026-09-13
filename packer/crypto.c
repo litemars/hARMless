@@ -156,26 +156,28 @@ void rc4_encrypt_decrypt(const uint8_t* key, size_t key_len, const uint8_t* inpu
     rc4_crypt(&ctx, input, output, len);
 }
 
-static void aes256_crypt_blocks(uint8_t* data, size_t len,
-                                const uint8_t* key, int encrypt) {
+static int aes256_crypt_blocks(uint8_t* data, size_t len,
+                               const uint8_t* key, int encrypt) {
+    if (!data || !key || len > INT_MAX) return 0;
+
     const size_t block_size = 16;
     size_t crypt_len = len - (len % block_size);
-    if (crypt_len == 0 || crypt_len > INT_MAX) return;
+    if (crypt_len == 0) return 1;
 
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) return;
+    if (!ctx) return 0;
 
     if (EVP_CipherInit_ex(ctx, EVP_aes_256_ecb(), NULL, key, NULL,
                           encrypt) != 1 ||
         EVP_CIPHER_CTX_set_padding(ctx, 0) != 1) {
         EVP_CIPHER_CTX_free(ctx);
-        return;
+        return 0;
     }
 
-    uint8_t* output = malloc(crypt_len);
+    uint8_t* output = malloc(crypt_len + EVP_MAX_BLOCK_LENGTH);
     if (!output) {
         EVP_CIPHER_CTX_free(ctx);
-        return;
+        return 0;
     }
 
     int out_len = 0;
@@ -183,7 +185,7 @@ static void aes256_crypt_blocks(uint8_t* data, size_t len,
         out_len != (int)crypt_len) {
         free(output);
         EVP_CIPHER_CTX_free(ctx);
-        return;
+        return 0;
     }
 
     int final_len = 0;
@@ -191,26 +193,31 @@ static void aes256_crypt_blocks(uint8_t* data, size_t len,
         final_len != 0) {
         free(output);
         EVP_CIPHER_CTX_free(ctx);
-        return;
+        return 0;
     }
 
     memcpy(data, output, crypt_len);
     free(output);
     EVP_CIPHER_CTX_free(ctx);
+    return 1;
 }
 
-void aes256_encrypt(uint8_t* data, size_t len, const uint8_t* key) {
-    aes256_crypt_blocks(data, len, key, 1);
+int aes256_encrypt(uint8_t* data, size_t len, const uint8_t* key) {
+    return aes256_crypt_blocks(data, len, key, 1);
 }
 
-void aes256_decrypt(uint8_t* data, size_t len, const uint8_t* key) {
-    aes256_crypt_blocks(data, len, key, 0);
+int aes256_decrypt(uint8_t* data, size_t len, const uint8_t* key) {
+    return aes256_crypt_blocks(data, len, key, 0);
 }
 
 // OpenSSL-based ChaCha20
-void chacha20_encrypt(uint8_t* data, size_t len, const uint8_t* key, const uint8_t* nonce) {
+int chacha20_encrypt(uint8_t* data, size_t len, const uint8_t* key,
+                     const uint8_t* nonce) {
+    if (!data || !key || !nonce || len > INT_MAX) return 0;
+    if (len == 0) return 1;
+
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) return;
+    if (!ctx) return 0;
 
     // ChaCha20 uses 32-byte key, 16-byte IV (nonce + counter)
     uint8_t iv[16] = {0};
@@ -218,28 +225,39 @@ void chacha20_encrypt(uint8_t* data, size_t len, const uint8_t* key, const uint8
 
     if (EVP_EncryptInit_ex(ctx, EVP_chacha20(), NULL, key, iv) != 1) {
         EVP_CIPHER_CTX_free(ctx);
-        return;
+        return 0;
     }
 
-    int out_len;
-    uint8_t* output = malloc(len);
+    int out_len = 0;
+    uint8_t* output = malloc(len + EVP_MAX_BLOCK_LENGTH);
     if (!output) {
         EVP_CIPHER_CTX_free(ctx);
-        return;
+        return 0;
     }
 
-    if (EVP_EncryptUpdate(ctx, output, &out_len, data, len) != 1) {
+    if (EVP_EncryptUpdate(ctx, output, &out_len, data, (int)len) != 1 ||
+        out_len != (int)len) {
         free(output);
         EVP_CIPHER_CTX_free(ctx);
-        return;
+        return 0;
+    }
+
+    int final_len = 0;
+    if (EVP_EncryptFinal_ex(ctx, output + out_len, &final_len) != 1 ||
+        final_len != 0) {
+        free(output);
+        EVP_CIPHER_CTX_free(ctx);
+        return 0;
     }
 
     memcpy(data, output, len);
     free(output);
     EVP_CIPHER_CTX_free(ctx);
+    return 1;
 }
 
-void chacha20_decrypt(uint8_t* data, size_t len, const uint8_t* key, const uint8_t* nonce) {
+int chacha20_decrypt(uint8_t* data, size_t len, const uint8_t* key,
+                     const uint8_t* nonce) {
     // ChaCha20 is symmetric
-    chacha20_encrypt(data, len, key, nonce);
+    return chacha20_encrypt(data, len, key, nonce);
 }
