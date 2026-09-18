@@ -5,12 +5,14 @@ PKG_CONFIG ?= pkg-config
 TARGET_PKG_CONFIG ?= $(PKG_CONFIG)
 
 # Target architecture: defaults to host arch, override with ARCH=arm64 or ARCH=x86_64
-ifeq ($(UNAME_M), x86_64)
-    ARCH ?= x86_64
-else ifeq ($(UNAME_M), aarch64)
-    ARCH ?= arm64
-else
-    $(error Cannot auto-detect ARCH from host '$(UNAME_M)'. Set ARCH=arm64 or ARCH=x86_64 explicitly)
+ifeq ($(origin ARCH), undefined)
+    ifeq ($(UNAME_M),x86_64)
+        ARCH := x86_64
+    else ifneq ($(filter $(UNAME_M),aarch64 arm64),)
+        ARCH := arm64
+    else
+        $(error Cannot auto-detect ARCH from host '$(UNAME_M)'. Set ARCH=arm64 or ARCH=x86_64 explicitly)
+    endif
 endif
 
 ifeq ($(ARCH), x86_64)
@@ -21,10 +23,10 @@ ifeq ($(ARCH), x86_64)
     endif
     TARGET_ARCH_FLAGS := -DTARGET_X86_64
 else ifeq ($(ARCH), arm64)
-    ifeq ($(UNAME_M), x86_64)
-        TARGET_CC ?= aarch64-linux-gnu-gcc   # cross-compile from x86-64
-    else
+    ifneq ($(filter $(UNAME_M),aarch64 arm64),)
         TARGET_CC ?= $(CC)                   # native ARM64 build
+    else
+        TARGET_CC ?= aarch64-linux-gnu-gcc   # cross-compile to ARM64
     endif
     TARGET_ARCH_FLAGS := -DTARGET_ARM64
 else
@@ -48,6 +50,17 @@ else
     $(error Unknown COPY_METHOD '$(COPY_METHOD)'. Use write, mmap, or io_uring)
 endif
 
+EXEC_METHOD ?= auto
+ifeq ($(EXEC_METHOD),auto)
+    EXEC_FLAGS :=
+else ifeq ($(EXEC_METHOD),memfd)
+    EXEC_FLAGS := -DEXEC_MEMFD_ONLY
+else ifeq ($(EXEC_METHOD),direct)
+    EXEC_FLAGS := -DEXEC_DIRECT_ONLY
+else
+    $(error Unknown EXEC_METHOD '$(EXEC_METHOD)'. Use auto, memfd, or direct)
+endif
+
 SELF_DELETE ?= 1
 ifeq ($(SELF_DELETE),1)
     SELF_DELETE_FLAGS :=
@@ -56,7 +69,16 @@ else ifeq ($(SELF_DELETE),0)
 else
     $(error Unknown SELF_DELETE value '$(SELF_DELETE)'. Use 0 or 1)
 endif
-LOADER_FEATURE_FLAGS := $(COPY_FLAGS) $(SELF_DELETE_FLAGS)
+
+ANTI_ANALYSIS ?= 1
+ifeq ($(ANTI_ANALYSIS),1)
+    ANTI_ANALYSIS_FLAGS :=
+else ifeq ($(ANTI_ANALYSIS),0)
+    ANTI_ANALYSIS_FLAGS := -DDISABLE_ANTI_ANALYSIS
+else
+    $(error Unknown ANTI_ANALYSIS value '$(ANTI_ANALYSIS)'. Use 0 or 1)
+endif
+LOADER_FEATURE_FLAGS := $(COPY_FLAGS) $(EXEC_FLAGS) $(SELF_DELETE_FLAGS) $(ANTI_ANALYSIS_FLAGS)
 
 STATIC ?= 0
 OPENSSL_CFLAGS := $(shell $(PKG_CONFIG) --cflags libcrypto 2>/dev/null || echo "")
@@ -65,15 +87,20 @@ LOADER_OPENSSL_CFLAGS := $(shell $(TARGET_PKG_CONFIG) --cflags libcrypto 2>/dev/
 LOADER_LDFLAGS := $(LDFLAGS)
 LOADER_OPENSSL_LIBS := $(shell $(TARGET_PKG_CONFIG) --libs libcrypto 2>/dev/null || echo "-lcrypto")
 ifeq ($(STATIC),1)
+    ifneq ($(EXEC_METHOD),memfd)
+        $(error STATIC=1 requires EXEC_METHOD=memfd because the direct backend needs a PIE loader)
+    endif
     LOADER_LDFLAGS += -static
     LOADER_OPENSSL_LIBS := $(shell $(TARGET_PKG_CONFIG) --static --libs libcrypto 2>/dev/null || echo "-lcrypto")
 else ifneq ($(STATIC),0)
     $(error Unknown STATIC value '$(STATIC)'. Use 0 or 1)
+else
+    LOADER_LDFLAGS += -pie
 endif
 
-# Security flags
-SECURITY_FLAGS := -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE
-STEALTH_FLAGS := -fomit-frame-pointer -fno-asynchronous-unwind-tables -fno-stack-protector
+STACK_PROTECTOR_FLAG ?= $(shell printf 'int main(void) { return 0; }\n' | $(CC) -Werror -fstack-protector-strong -x c - -c -o /dev/null >/dev/null 2>&1 && echo -fstack-protector-strong || echo -fstack-protector)
+SECURITY_FLAGS := $(STACK_PROTECTOR_FLAG) -D_FORTIFY_SOURCE=2 -fPIE
+STEALTH_FLAGS := -fomit-frame-pointer -fno-asynchronous-unwind-tables -fno-stack-protector -fPIE
 
 # Directories
 INCLUDE_DIR := include
@@ -86,34 +113,45 @@ BUILD_DIR := build
 PACKER_BIN := $(BUILD_DIR)/packer
 LOADER_BIN := $(BUILD_DIR)/loader
 STUBGEN_BIN := $(BUILD_DIR)/stubgen
+CRYPTO_TEST_BIN := $(BUILD_DIR)/crypto_format_test
 
 # Enhanced source files (including obfuscation)
 PACKER_SOURCES := $(PACKER_DIR)/packer.c $(PACKER_DIR)/crypto.c $(PACKER_DIR)/obfuscation.c
-LOADER_SOURCES := $(LOADER_DIR)/loader.c $(LOADER_DIR)/memexec.c $(LOADER_DIR)/polymorph.c $(LOADER_DIR)/strings.c $(PACKER_DIR)/elf64.c $(PACKER_DIR)/crypto.c $(PACKER_DIR)/obfuscation.c
+LOADER_SOURCES := $(LOADER_DIR)/loader.c $(LOADER_DIR)/memexec.c
+ifneq ($(EXEC_METHOD),memfd)
+    LOADER_SOURCES += $(LOADER_DIR)/elfexec.c
+endif
+LOADER_SOURCES += $(LOADER_DIR)/polymorph.c $(LOADER_DIR)/strings.c $(PACKER_DIR)/elf64.c $(PACKER_DIR)/crypto.c $(PACKER_DIR)/obfuscation.c
 # stubgen now parses the loader ELF to locate symbols and shares is_elf64
 STUBGEN_SOURCES := $(STUBGEN_DIR)/stubgen.c $(PACKER_DIR)/elf64.c
+PROJECT_HEADERS := $(wildcard $(INCLUDE_DIR)/*.h)
 
 # Include paths
 INCLUDES := -I$(INCLUDE_DIR)
 
+.PHONY: all pack clean test test-crypto test-legacy test-centos6 install-deps
+
 # Default target
-all: $(BUILD_DIR) $(PACKER_BIN) $(LOADER_BIN) $(STUBGEN_BIN)
+all: $(PACKER_BIN) $(LOADER_BIN) $(STUBGEN_BIN)
 
 # Create build directory
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 # Build packer
-$(PACKER_BIN): $(PACKER_SOURCES)
-	$(CC) $(CFLAGS) $(SECURITY_FLAGS) $(TARGET_ARCH_FLAGS) $(OPENSSL_CFLAGS) $(INCLUDES) $(LDFLAGS) -o $@ $^ $(OPENSSL_LIBS) $(LDLIBS)
+$(PACKER_BIN): $(PACKER_SOURCES) $(PROJECT_HEADERS) Makefile | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(SECURITY_FLAGS) $(TARGET_ARCH_FLAGS) $(OPENSSL_CFLAGS) $(INCLUDES) $(LDFLAGS) -o $@ $(PACKER_SOURCES) $(OPENSSL_LIBS) $(LDLIBS)
 
 # Build loader
-$(LOADER_BIN): $(LOADER_SOURCES)
-	$(TARGET_CC) $(TARGET_CFLAGS) $(LOADER_FEATURE_FLAGS) $(STEALTH_FLAGS) $(TARGET_ARCH_FLAGS) $(LOADER_OPENSSL_CFLAGS) $(INCLUDES) $(LOADER_LDFLAGS) -o $@ $^ $(LOADER_OPENSSL_LIBS) $(LDLIBS)
+$(LOADER_BIN): $(LOADER_SOURCES) $(PROJECT_HEADERS) Makefile | $(BUILD_DIR)
+	$(TARGET_CC) $(TARGET_CFLAGS) $(LOADER_FEATURE_FLAGS) $(STEALTH_FLAGS) $(TARGET_ARCH_FLAGS) $(LOADER_OPENSSL_CFLAGS) $(INCLUDES) $(LOADER_LDFLAGS) -o $@ $(LOADER_SOURCES) $(LOADER_OPENSSL_LIBS) $(LDLIBS)
 
 # Build stub generator
-$(STUBGEN_BIN): $(STUBGEN_SOURCES)
-	$(CC) $(CFLAGS) $(INCLUDES) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+$(STUBGEN_BIN): $(STUBGEN_SOURCES) $(PROJECT_HEADERS) Makefile | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) $(LDFLAGS) -o $@ $(STUBGEN_SOURCES) $(LDLIBS)
+
+$(CRYPTO_TEST_BIN): tests/crypto_format_test.c $(PACKER_DIR)/crypto.c $(PROJECT_HEADERS) Makefile | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(OPENSSL_CFLAGS) $(INCLUDES) $(LDFLAGS) -o $@ tests/crypto_format_test.c $(PACKER_DIR)/crypto.c $(OPENSSL_LIBS) $(LDLIBS)
 
 # Advanced packing presets
 pack: $(PACKER_BIN) $(LOADER_BIN) $(STUBGEN_BIN)
@@ -133,12 +171,22 @@ clean:
 
 test:
 	@echo "Running tests..."
-	@if [ -x tests/unit_test.sh ]; then \
-		cd tests && ./unit_test.sh; \
+	@if [ -f tests/unit_test.sh ]; then \
+		cd tests && bash ./unit_test.sh; \
 	else \
 		echo "No tests found: tests/unit_test.sh"; \
 		exit 1; \
 	fi
+
+test-crypto: $(CRYPTO_TEST_BIN)
+	$(CRYPTO_TEST_BIN)
+
+test-legacy:
+	@$(MAKE) clean
+	@$(MAKE) test COPY_METHOD=write EXEC_METHOD=auto ANTI_ANALYSIS=0 SELF_DELETE=0 TARGET_CFLAGS='$(TARGET_CFLAGS) -DHARMLESS_TEST_MEMFD_ENOSYS'
+
+test-centos6:
+	bash tests/test_centos6.sh
 
 # Install dependencies
 install-deps:
@@ -155,7 +203,7 @@ install-deps:
 			sudo apt-get install -y gcc libssl-dev pkg-config file; \
 		fi; \
 	elif command -v yum >/dev/null 2>&1; then \
-		sudo yum install -y gcc openssl-devel pkgconf-pkg-config file; \
+		sudo yum install -y gcc openssl-devel pkgconfig file; \
 	elif command -v pacman >/dev/null 2>&1; then \
 		sudo pacman -S gcc openssl pkgconf file; \
 	else \

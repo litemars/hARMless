@@ -230,6 +230,15 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "Error: packed file is smaller than pack_header_t\n");
         goto cleanup;
     }
+    if (!pack_header_format_valid((const pack_header_t*)packed_data)) {
+        fprintf(stderr, "Error: unsupported packed format; repack the input\n");
+        goto cleanup;
+    }
+    if (!pack_header_valid((const pack_header_t*)packed_data,
+                           packed_size - sizeof(pack_header_t))) {
+        fprintf(stderr, "Error: invalid packed payload; repack the input\n");
+        goto cleanup;
+    }
 
     /* Locate required patch points in the loader. */
     size_t magic_off = 0, magic_sz = 0;

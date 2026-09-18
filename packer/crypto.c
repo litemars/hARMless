@@ -1,11 +1,8 @@
 #include "crypto.h"
 #include "common.h"
 #include <string.h>
-#include <time.h>
 #include <limits.h>
 #include <openssl/evp.h>
-#include <openssl/rand.h>
-#include <openssl/err.h>
 
 #if defined(__aarch64__)
 const volatile uint32_t hARMless_sc[SC_TABLE_LEN] = {
@@ -113,151 +110,26 @@ uint32_t crc32(const uint8_t* data, size_t len) {
     return crc ^ 0xFFFFFFFF;
 }
 
-void rc4_init(rc4_context_t* ctx, const uint8_t* key, size_t key_len) {
-    int i, j;
-    uint8_t temp;
+int aes256_ctr_crypt(uint8_t* data, size_t len, const uint8_t* key,
+                     const uint8_t* iv) {
+    EVP_CIPHER_CTX* ctx;
+    uint8_t final_block[EVP_MAX_BLOCK_LENGTH];
+    int output_len;
+    int final_len;
+    int ok;
 
-    // Initialize S-box
-    for (i = 0; i < 256; i++) {
-        ctx->S[i] = i;
-    }
-
-    j = 0;
-    for (i = 0; i < 256; i++) {
-        j = (j + ctx->S[i] + key[i % key_len]) & 0xFF;
-        temp = ctx->S[i];
-        ctx->S[i] = ctx->S[j];
-        ctx->S[j] = temp;
-    }
-
-    ctx->i = 0;
-    ctx->j = 0;
-}
-
-void rc4_crypt(rc4_context_t* ctx, const uint8_t* input, uint8_t* output, size_t len) {
-    size_t n;
-    uint8_t temp;
-
-    for (n = 0; n < len; n++) {
-        ctx->i = (ctx->i + 1) & 0xFF;
-        ctx->j = (ctx->j + ctx->S[ctx->i]) & 0xFF;
-
-        temp = ctx->S[ctx->i];
-        ctx->S[ctx->i] = ctx->S[ctx->j];
-        ctx->S[ctx->j] = temp;
-
-        output[n] = input[n] ^ ctx->S[(ctx->S[ctx->i] + ctx->S[ctx->j]) & 0xFF];
-    }
-}
-
-void rc4_encrypt_decrypt(const uint8_t* key, size_t key_len, const uint8_t* input, uint8_t* output, size_t len) {
-    rc4_context_t ctx;
-    rc4_init(&ctx, key, key_len);
-    rc4_crypt(&ctx, input, output, len);
-}
-
-static int aes256_crypt_blocks(uint8_t* data, size_t len,
-                               const uint8_t* key, int encrypt) {
-    if (!data || !key || len > INT_MAX) return 0;
-
-    const size_t block_size = 16;
-    size_t crypt_len = len - (len % block_size);
-    if (crypt_len == 0) return 1;
-
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) return 0;
-
-    if (EVP_CipherInit_ex(ctx, EVP_aes_256_ecb(), NULL, key, NULL,
-                          encrypt) != 1 ||
-        EVP_CIPHER_CTX_set_padding(ctx, 0) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        return 0;
-    }
-
-    uint8_t* output = malloc(crypt_len + EVP_MAX_BLOCK_LENGTH);
-    if (!output) {
-        EVP_CIPHER_CTX_free(ctx);
-        return 0;
-    }
-
-    int out_len = 0;
-    if (EVP_CipherUpdate(ctx, output, &out_len, data, (int)crypt_len) != 1 ||
-        out_len != (int)crypt_len) {
-        free(output);
-        EVP_CIPHER_CTX_free(ctx);
-        return 0;
-    }
-
-    int final_len = 0;
-    if (EVP_CipherFinal_ex(ctx, output + out_len, &final_len) != 1 ||
-        final_len != 0) {
-        free(output);
-        EVP_CIPHER_CTX_free(ctx);
-        return 0;
-    }
-
-    memcpy(data, output, crypt_len);
-    free(output);
-    EVP_CIPHER_CTX_free(ctx);
-    return 1;
-}
-
-int aes256_encrypt(uint8_t* data, size_t len, const uint8_t* key) {
-    return aes256_crypt_blocks(data, len, key, 1);
-}
-
-int aes256_decrypt(uint8_t* data, size_t len, const uint8_t* key) {
-    return aes256_crypt_blocks(data, len, key, 0);
-}
-
-// OpenSSL-based ChaCha20
-int chacha20_encrypt(uint8_t* data, size_t len, const uint8_t* key,
-                     const uint8_t* nonce) {
-    if (!data || !key || !nonce || len > INT_MAX) return 0;
+    if (!data || !key || !iv || len > INT_MAX) return 0;
     if (len == 0) return 1;
 
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    ctx = EVP_CIPHER_CTX_new();
     if (!ctx) return 0;
 
-    // ChaCha20 uses 32-byte key, 16-byte IV (nonce + counter)
-    uint8_t iv[16] = {0};
-    memcpy(iv, nonce, 12); // Copy 12-byte nonce, counter starts at 0
+    ok = EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), NULL, key, iv) == 1 &&
+         EVP_EncryptUpdate(ctx, data, &output_len, data, (int)len) == 1 &&
+         output_len == (int)len &&
+         EVP_EncryptFinal_ex(ctx, final_block, &final_len) == 1 &&
+         final_len == 0;
 
-    if (EVP_EncryptInit_ex(ctx, EVP_chacha20(), NULL, key, iv) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        return 0;
-    }
-
-    int out_len = 0;
-    uint8_t* output = malloc(len + EVP_MAX_BLOCK_LENGTH);
-    if (!output) {
-        EVP_CIPHER_CTX_free(ctx);
-        return 0;
-    }
-
-    if (EVP_EncryptUpdate(ctx, output, &out_len, data, (int)len) != 1 ||
-        out_len != (int)len) {
-        free(output);
-        EVP_CIPHER_CTX_free(ctx);
-        return 0;
-    }
-
-    int final_len = 0;
-    if (EVP_EncryptFinal_ex(ctx, output + out_len, &final_len) != 1 ||
-        final_len != 0) {
-        free(output);
-        EVP_CIPHER_CTX_free(ctx);
-        return 0;
-    }
-
-    memcpy(data, output, len);
-    free(output);
     EVP_CIPHER_CTX_free(ctx);
-    return 1;
-}
-
-int chacha20_decrypt(uint8_t* data, size_t len, const uint8_t* key,
-                     const uint8_t* nonce) {
-    // ChaCha20 is symmetric
-    return chacha20_encrypt(data, len, key, nonce);
+    return ok;
 }

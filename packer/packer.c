@@ -1,51 +1,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-#include <fcntl.h>
-#include <unistd.h>
+#include <limits.h>
 #include <sys/stat.h>
+#include <openssl/rand.h>
 #include "common.h"
 #include "elf64.h"
 #include "crypto.h"
 
-void generate_random_key(uint8_t* key, size_t key_size) {
-    size_t i;
-    FILE* urandom = fopen("/dev/urandom", "rb");
-    if (urandom) {
-        if (fread(key, 1, key_size, urandom) != key_size) {
-            // Fallback if read fails
-            srand(time(NULL));
-            for (i = 0; i < key_size; i++) {
-                key[i] = rand() & 0xFF;
-            }
-        }
-        fclose(urandom);
-    } else {
-        srand(time(NULL));
-        for (i = 0; i < key_size; i++) {
-            key[i] = rand() & 0xFF;
-        }
-    }
-}
-
-int multi_layer_encrypt(uint8_t* data, size_t len, const pack_header_t* header) {
-    if (!data || !header) return 0;
-
-    // Layer 1: AES-256
-    if (!aes256_encrypt(data, len, header->primary_key)) return 0;
-    
-
-    // Layer 2: ChaCha20
-    
-    if (!chacha20_encrypt(data, len, header->secondary_key, header->nonce))
-        return 0;
-    
-
-    // Layer 3: RC4
-    
-    rc4_encrypt_decrypt(header->tertiary_key, 32, data, data, len);
-    return 1;
+static int generate_random_key(uint8_t* key, size_t key_size) {
+    if (!key || key_size == 0 || key_size > INT_MAX) return 0;
+    return RAND_bytes(key, (int)key_size) == 1;
 }
 
 int is_elf64(const void* data) {
@@ -108,15 +73,19 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    fseek(input_fp, 0, SEEK_END);
-    size_t file_size = ftell(input_fp);
-    fseek(input_fp, 0, SEEK_SET);
-
-    if (file_size == 0 || file_size > SIZE_MAX / 2) {
-        fprintf(stderr, "Error: Input file is empty or too large\n");
+    if (fseek(input_fp, 0, SEEK_END) != 0) {
+        fprintf(stderr, "Error: Cannot determine input file size\n");
         fclose(input_fp);
         return 1;
     }
+    long file_length = ftell(input_fp);
+    if (file_length <= 0 || file_length > INT_MAX ||
+        fseek(input_fp, 0, SEEK_SET) != 0) {
+        fprintf(stderr, "Error: Input file is empty, unreadable, or too large\n");
+        fclose(input_fp);
+        return 1;
+    }
+    size_t file_size = (size_t)file_length;
 
     uint8_t* file_data = malloc(file_size);
     if (!file_data) {
@@ -134,7 +103,7 @@ int main(int argc, char* argv[]) {
     }
     fclose(input_fp);
 
-    if (!is_elf64_target(file_data)) {
+    if (file_size < sizeof(Elf64_Ehdr) || !is_elf64_target(file_data)) {
         fprintf(stderr, "Error: Input file is not a %s ELF binary\n",
                 target_arch_name());
         free(file_data);
@@ -147,64 +116,48 @@ int main(int argc, char* argv[]) {
     strip_elf_metadata(file_data, file_size);
 
     uint32_t original_crc = crc32(file_data, file_size);
-    uint8_t* encrypted_data = malloc(file_size);
-    if (!encrypted_data) {
-        fprintf(stderr, "Error: Cannot allocate memory for encrypted data\n");
-        free(file_data);
-        return 1;
-    }
-
-    memcpy(encrypted_data, file_data, file_size);
-
     pack_header_t header;
+    FILE* output_fp = NULL;
+    int result = 1;
+
     memset(&header, 0, sizeof(header));
 
     header.magic = PACKED_MAGIC;
-    header.original_size = file_size;
-    header.packed_size = file_size;
+    header.original_size = (uint32_t)file_size;
+    header.packed_size = (uint32_t)file_size;
     header.crc32 = original_crc;
 
-    generate_random_key(header.primary_key, 32);
-    generate_random_key(header.secondary_key, 32);
-    generate_random_key(header.tertiary_key, 32);
-    generate_random_key(header.nonce, 16);
-    generate_random_key(header.salt, 16);
+    if (!generate_random_key(header.key, sizeof(header.key)) ||
+        !generate_random_key(header.iv, sizeof(header.iv))) {
+        fprintf(stderr, "Error: Cannot read cryptographic randomness\n");
+        goto cleanup;
+    }
+    memcpy(header.format_tag, PACK_FORMAT_TAG, sizeof(header.format_tag));
 
-    if (!multi_layer_encrypt(encrypted_data, file_size, &header)) {
+    if (!aes256_ctr_crypt(file_data, file_size, header.key, header.iv)) {
         fprintf(stderr, "Error: Encryption failed\n");
-        secure_memory_wipe(file_data, file_size);
-        secure_memory_wipe(encrypted_data, file_size);
-        free(file_data);
-        free(encrypted_data);
-        return 1;
+        goto cleanup;
     }
 
-    FILE* output_fp = fopen(output_file, "wb");
+    output_fp = fopen(output_file, "wb");
     if (!output_fp) {
         fprintf(stderr, "Error: Cannot create output file '%s'\n", output_file);
-        free(file_data);
-        free(encrypted_data);
-        return 1;
+        goto cleanup;
     }
 
     size_t header_written = fwrite(&header, sizeof(header), 1, output_fp);
     if (header_written != 1) {
         fprintf(stderr, "Error: Cannot write header to output file\n");
-        fclose(output_fp);
-        free(file_data);
-        free(encrypted_data);
-        return 1;
+        goto cleanup;
     }
 
-    size_t data_written = fwrite(encrypted_data, 1, file_size, output_fp);
+    size_t data_written = fwrite(file_data, 1, file_size, output_fp);
     if (data_written != file_size) {
         fprintf(stderr, "Error: Cannot write encrypted data to output file (wrote %zu of %zu bytes)\n", data_written, file_size);
-        fclose(output_fp);
-        free(file_data);
-        free(encrypted_data);
-        return 1;
+        goto cleanup;
     }
     fclose(output_fp);
+    output_fp = NULL;
 
     chmod(output_file, 0755);
 
@@ -213,11 +166,15 @@ int main(int argc, char* argv[]) {
     printf("Output file: %s\n", output_file);
     printf("Packed size: %zu bytes\n", sizeof(header) + file_size);
     printf("CRC32: 0x%08X\n", original_crc);
+    printf("Cipher: AES-256-CTR\n");
 
+    result = 0;
+
+cleanup:
+    if (output_fp) fclose(output_fp);
     secure_memory_wipe(file_data, file_size);
-    secure_memory_wipe(encrypted_data, file_size);
+    secure_memory_wipe(&header, sizeof(header));
     free(file_data);
-    free(encrypted_data);
 
-    return 0;
+    return result;
 }

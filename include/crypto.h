@@ -2,25 +2,10 @@
 #ifndef CRYPTO_H
 #define CRYPTO_H
 
-#include <stdio.h>
+#include <stddef.h>
 #include <stdint.h>
-#include <stdlib.h>
 
-typedef struct {
-    uint8_t S[256];
-    uint8_t i;
-    uint8_t j;
-} rc4_context_t;
-
-// RC4 functions
-void rc4_init(rc4_context_t* ctx, const uint8_t* key, size_t key_len);
-void rc4_crypt(rc4_context_t* ctx, const uint8_t* input, uint8_t* output, size_t len);
-void rc4_encrypt_decrypt(const uint8_t* key, size_t key_len, const uint8_t* input, uint8_t* output, size_t len);
-
-// Advanced cryptographic functions
-int aes256_encrypt(uint8_t* data, size_t len, const uint8_t* key);
-int aes256_decrypt(uint8_t* data, size_t len, const uint8_t* key);
-int chacha20_encrypt(uint8_t* data, size_t len, const uint8_t* key, const uint8_t* nonce);
-int chacha20_decrypt(uint8_t* data, size_t len, const uint8_t* key, const uint8_t* nonce);
+int aes256_ctr_crypt(uint8_t* data, size_t len, const uint8_t* key,
+                     const uint8_t* iv);
 
 #endif

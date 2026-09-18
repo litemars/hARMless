@@ -48,6 +48,7 @@ typedef int64_t Elf64_Sxword;
 #define PT_NOTE 4
 #define PT_SHLIB 5
 #define PT_PHDR 6
+#define PT_GNU_STACK 0x6474e551
 
 
 #define PF_X 0x1

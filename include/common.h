@@ -24,17 +24,36 @@
 #error "Unsupported architecture: only aarch64 and x86_64 are supported"
 #endif
 
+#define PACK_FORMAT_TAG       "HARMCTR1"
+#define PACK_HEADER_WIRE_SIZE 72U
+
 typedef struct {
     uint32_t magic;              
     uint32_t original_size;
     uint32_t packed_size;
     uint32_t crc32;
-    uint8_t primary_key[32];     // AES-256 key
-    uint8_t secondary_key[32];   // ChaCha20 key
-    uint8_t tertiary_key[32];    // RC4 key
-    uint8_t nonce[16];           
-    uint8_t salt[16];            
+    uint8_t key[32];
+    uint8_t iv[16];
+    uint8_t format_tag[8];
 } pack_header_t;
+
+typedef char pack_header_wire_size_must_remain_72[
+    sizeof(pack_header_t) == PACK_HEADER_WIRE_SIZE ? 1 : -1
+];
+
+static inline int pack_header_format_valid(const pack_header_t* header) {
+    return header != NULL &&
+           memcmp(header->format_tag, PACK_FORMAT_TAG,
+                  sizeof(header->format_tag)) == 0;
+}
+
+static inline int pack_header_valid(const pack_header_t* header,
+                                    size_t payload_size) {
+    return pack_header_format_valid(header) &&
+           header->original_size != 0 &&
+           header->original_size == header->packed_size &&
+           (size_t)header->packed_size <= payload_size;
+}
 
 // Linux-specific mmap flags (not exposed without _GNU_SOURCE)
 #ifndef MAP_ANON
@@ -331,12 +350,11 @@ static inline void debug_print(const char *msg) {
 
 // Function prototypes
 uint32_t crc32(const uint8_t* data, size_t len);
-void generate_random_key(uint8_t* key, size_t key_size);
 int comprehensive_anti_debug_check();
-int multi_layer_encrypt(uint8_t* data, size_t len, const pack_header_t* header);
-int multi_layer_decrypt(uint8_t* data, size_t len, const pack_header_t* header);
-int execute_from_memory(const uint8_t* elf_data, size_t elf_size, char* const argv[], char* const envp[]);
-pack_header_t* find_packed_header(const uint8_t* data, size_t data_size);
+int execute_from_memory(uint8_t* elf_data, size_t elf_size,
+                        char* const argv[], char* const envp[]);
+int execute_elf_image(uint8_t* elf_data, size_t elf_size,
+                      char* const argv[], char* const envp[]);
 
 // Pre-encryption ELF transforms
 void strip_elf_metadata(uint8_t* data, size_t len);
