@@ -4,7 +4,7 @@
 # Tests packing and execution of /bin/ls
 
 create_packed_binary(){ 
-    # The binary self delete every run, thus it needs to recreated for every test
+    # Recreate the binary so this test also works with SELF_DELETE=1.
     echo "Generating self-contained executable..."
     echo
     ../build/stubgen ../build/loader test_ls.packed test_ls_packed
