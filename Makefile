@@ -39,7 +39,7 @@ TARGET_CFLAGS ?= -Wall -Wextra -O2 -std=c99
 LDFLAGS ?=
 LDLIBS ?=
 
-EXEC_METHOD ?= auto
+EXEC_METHOD ?= memfd
 ifeq ($(EXEC_METHOD),auto)
     EXEC_FLAGS :=
 else ifeq ($(EXEC_METHOD),memfd)
