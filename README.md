@@ -25,6 +25,7 @@ and executes through direct anonymous mapping or an optional memfd backend.
 - **Core File Suppression**: Sets `RLIMIT_CORE` to zero
 - **Secure Memory Wiping**: Multi-pass memory erasure for sensitive data
 - **Selected Raw Syscalls**: memfd and io_uring operations use encoded syscall numbers
+- **Kernel-Style Process Identity**: Randomizes the loader's `argv[0]`, `comm`, and memfd name
 - **Optional Self-Deletion**: Keeps the launcher by default; use `SELF_DELETE=1` for single-use output
 - **Polymorphic Loader**: Every packed binary is bytewise unique — randomized magic, filler, padding, and symbol table scrubbing at stub-generation time
 
@@ -123,6 +124,9 @@ that wrapper is available.
 ---
 
 ## 📖 Usage
+
+For the complete build-variable, backend, toolchain, and configuration
+reference, see [PACKER_OPTIONS.md](PACKER_OPTIONS.md).
 
 ### Basic Packing
 
@@ -237,6 +241,7 @@ Every invocation of `stubgen` produces a bytewise-unique packed binary, even whe
 | Random filler | 256-byte `g_pack_polymorph` array in `.data` overwritten with random bytes |
 | Random padding | 0–4095 bytes of random junk inserted between loader stub and payload |
 | SC table re-keying | `hARMless_sc[]` re-encoded with a fresh random `g_sc_xor_key` so syscall numbers differ in every binary |
+| Process-name re-keying | Kernel-style process-name bytes are re-encoded with a fresh XOR key |
 | Header OTP blinding | 76-byte header body XOR'd with `g_pack_polymorph` bytes |
 | Executable mutation | 512 executed bytes regenerated as architecture-safe instruction variants |
 | Symbol scrub | `.symtab`/`.strtab` sections overwritten with random data; ELF section header fields zeroed |
@@ -283,7 +288,7 @@ does not replace a publisher signature or platform allowlisting.
 - **Obfuscated syscall numbers**: Stored XOR'd with `0xDEADBEEF`, decoded at each call site
 - **Selected raw syscalls**: memfd and io_uring do not depend on libc wrappers
 - **In-memory execution**: No `/tmp` artifacts
-- **Stable identity**: Does not enumerate debuggers/VMs or masquerade as a kernel thread
+- **Kernel-style identity**: Applies an encoded process name through `PR_SET_NAME` and uses it for the memfd
 
 ---
 

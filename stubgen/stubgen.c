@@ -255,6 +255,7 @@ void print_usage(const char* program_name) {
     printf("  - random magic value and 256-byte .data filler\n");
     printf("  - random padding (0-%d bytes) before payload\n", POLYMORPH_PADDING_MAX - 1);
     printf("  - syscall-table re-keying (g_sc_xor_key + hARMless_sc)\n");
+    printf("  - process-name block re-keying\n");
     printf("  - header body OTP blinding (g_pack_polymorph as one-time pad)\n");
     printf("  - symbol scrub and section-header strip\n");
 }
@@ -330,6 +331,20 @@ int main(int argc, char* argv[]) {
         has_sc_rekey = 1;
     }
 
+    /* Locate the kernel-style process-name patch points. */
+    size_t name_key_off = 0, name_key_sz = 0;
+    size_t name_blk_off = 0, name_blk_sz = 0;
+    int    has_name_rekey = 0;
+    if (find_loader_symbol(loader_data, loader_size,
+                           "g_process_name_xor_key",
+                           &name_key_off, &name_key_sz) == 0 &&
+        find_loader_symbol(loader_data, loader_size,
+                           "g_obf_process_names",
+                           &name_blk_off, &name_blk_sz) == 0 &&
+        name_key_sz == sizeof(uint8_t) && name_blk_sz > 0) {
+        has_name_rekey = 1;
+    }
+
     /* Generate per-pack random material. */
     uint32_t new_magic   = 0;
     uint32_t new_xor_key = 0;
@@ -376,6 +391,18 @@ int main(int argc, char* argv[]) {
         for (size_t i = 0; i < n_sc; i++)
             sc_tab[i] = (sc_tab[i] ^ old_xor_key) ^ new_xor_key;
         memcpy(loader_data + sc_key_off, &new_xor_key, sizeof(new_xor_key));
+    }
+
+    uint8_t new_name_key = 0;
+    if (has_name_rekey) {
+        uint8_t old_name_key = loader_data[name_key_off];
+        if (get_random_bytes(&new_name_key, sizeof(new_name_key)) != 0)
+            goto cleanup;
+        if (new_name_key == 0) new_name_key = 0xA5;
+        for (size_t i = 0; i < name_blk_sz; ++i)
+            loader_data[name_blk_off + i] =
+                (loader_data[name_blk_off + i] ^ old_name_key) ^ new_name_key;
+        loader_data[name_key_off] = new_name_key;
     }
 
     Elf64_Ehdr* ehdr = (Elf64_Ehdr*)loader_data;
@@ -425,6 +452,11 @@ int main(int argc, char* argv[]) {
         printf("  SC XOR key    : 0x%08X (re-keyed)\n", new_xor_key);
     else
         printf("  SC XOR key    : (symbols absent, skipped)\n");
+    if (has_name_rekey)
+        printf("  Name XOR key  : 0x%02X (re-keyed)\n",
+               (unsigned)new_name_key);
+    else
+        printf("  Name XOR key  : (symbols absent, skipped)\n");
     printf("  Header blind  : OTP from g_pack_polymorph[0..%zu]\n",
            sizeof(pack_header_t) - sizeof(uint32_t) - 1);
 
