@@ -2,6 +2,7 @@
 #define ELF64_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 // ELF64 structures for ARM64
 typedef uint16_t Elf64_Half;
@@ -48,6 +49,7 @@ typedef int64_t Elf64_Sxword;
 #define PT_NOTE 4
 #define PT_SHLIB 5
 #define PT_PHDR 6
+#define PT_GNU_STACK 0x6474e551
 
 
 #define PF_X 0x1
@@ -115,6 +117,17 @@ typedef struct {
     Elf64_Addr    st_value;  // virtual address of the symbol
     Elf64_Xword   st_size;
 } Elf64_Sym;
+
+typedef struct {
+    Elf64_Sxword d_tag;
+    union {
+        Elf64_Xword d_val;
+        Elf64_Addr d_ptr;
+    } d_un;
+} Elf64_Dyn;
+
+#define DT_NULL   0
+#define DT_NEEDED 1
 
 int is_elf64(const void* data);
 int is_elf64_arm64(const void* data);

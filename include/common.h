@@ -5,11 +5,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/types.h>
-#include <sys/ptrace.h>
-#include <sys/wait.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
-#include <sys/prctl.h>
 #include <fcntl.h>
 #include <string.h>
 #include <stdio.h>
@@ -24,17 +21,36 @@
 #error "Unsupported architecture: only aarch64 and x86_64 are supported"
 #endif
 
+#define PACK_FORMAT_TAG       "HARMGCM1"
+#define PACK_HEADER_WIRE_SIZE 80U
+
 typedef struct {
     uint32_t magic;              
     uint32_t original_size;
     uint32_t packed_size;
-    uint32_t crc32;
-    uint8_t primary_key[32];     // AES-256 key
-    uint8_t secondary_key[32];   // ChaCha20 key
-    uint8_t tertiary_key[32];    // RC4 key
-    uint8_t nonce[16];           
-    uint8_t salt[16];            
+    uint8_t key[32];
+    uint8_t iv[12];
+    uint8_t tag[16];
+    uint8_t format_tag[8];
 } pack_header_t;
+
+typedef char pack_header_wire_size_must_remain_80[
+    sizeof(pack_header_t) == PACK_HEADER_WIRE_SIZE ? 1 : -1
+];
+
+static inline int pack_header_format_valid(const pack_header_t* header) {
+    return header != NULL &&
+           memcmp(header->format_tag, PACK_FORMAT_TAG,
+                  sizeof(header->format_tag)) == 0;
+}
+
+static inline int pack_header_valid(const pack_header_t* header,
+                                    size_t payload_size) {
+    return pack_header_format_valid(header) &&
+           header->original_size != 0 &&
+           header->original_size == header->packed_size &&
+           (size_t)header->packed_size <= payload_size;
+}
 
 // Linux-specific mmap flags (not exposed without _GNU_SOURCE)
 #ifndef MAP_ANON
@@ -42,6 +58,15 @@ typedef struct {
 #endif
 #ifndef MAP_POPULATE
 #define MAP_POPULATE 0x8000 /* ARM64/x86: prefault pages at mmap time */
+#endif
+#ifndef MAP_FIXED_NOREPLACE
+#define MAP_FIXED_NOREPLACE 0x100000
+#endif
+#ifndef MFD_CLOEXEC
+#define MFD_CLOEXEC 0x0001U
+#endif
+#ifndef PR_SET_NAME
+#define PR_SET_NAME 15
 #endif
 
 #define SC_XOR_KEY 0xDEADBEEFU
@@ -57,15 +82,12 @@ typedef struct {
 #define SC_IDX_FTRUNCATE         8
 #define SC_IDX_LSEEK             9
 #define SC_IDX_MPROTECT         10
-#define SC_IDX_PTRACE           11
-#define SC_IDX_GETPID           12
-#define SC_IDX_GETPPID          13
-#define SC_IDX_PRCTL            14
-#define SC_IDX_MSYNC            15
-#define SC_IDX_IO_URING_SETUP    16
-#define SC_IDX_IO_URING_ENTER    17
-#define SC_IDX_IO_URING_REGISTER 18
-#define SC_TABLE_LEN             19
+#define SC_IDX_PRCTL            11
+#define SC_IDX_MSYNC            12
+#define SC_IDX_IO_URING_SETUP    13
+#define SC_IDX_IO_URING_ENTER    14
+#define SC_IDX_IO_URING_REGISTER 15
+#define SC_TABLE_LEN             16
 
 extern const volatile uint32_t hARMless_sc[SC_TABLE_LEN];
 /* Per-pack runtime XOR key; patched by stubgen alongside hARMless_sc[]. */
@@ -82,10 +104,7 @@ extern volatile uint32_t g_sc_xor_key;
 #define __NR_ftruncate         ((long)(hARMless_sc[SC_IDX_FTRUNCATE]         ^ g_sc_xor_key))
 #define __NR_lseek             ((long)(hARMless_sc[SC_IDX_LSEEK]             ^ g_sc_xor_key))
 #define __NR_mprotect          ((long)(hARMless_sc[SC_IDX_MPROTECT]          ^ g_sc_xor_key))
-#define __NR_ptrace            ((long)(hARMless_sc[SC_IDX_PTRACE]            ^ g_sc_xor_key))
-#define __NR_getpid            ((long)(hARMless_sc[SC_IDX_GETPID]            ^ g_sc_xor_key))
-#define __NR_getppid           ((long)(hARMless_sc[SC_IDX_GETPPID]           ^ g_sc_xor_key))
-#define __NR_prctl             ((long)(hARMless_sc[SC_IDX_PRCTL]             ^ g_sc_xor_key))
+#define __NR_prctl             ((long)(hARMless_sc[SC_IDX_PRCTL]            ^ g_sc_xor_key))
 #define __NR_msync             ((long)(hARMless_sc[SC_IDX_MSYNC]             ^ g_sc_xor_key))
 #define __NR_io_uring_setup    ((long)(hARMless_sc[SC_IDX_IO_URING_SETUP]    ^ g_sc_xor_key))
 #define __NR_io_uring_enter    ((long)(hARMless_sc[SC_IDX_IO_URING_ENTER]    ^ g_sc_xor_key))
@@ -330,90 +349,24 @@ static inline void debug_print(const char *msg) {
 #endif
 
 // Function prototypes
-uint32_t crc32(const uint8_t* data, size_t len);
-void generate_random_key(uint8_t* key, size_t key_size);
-int comprehensive_anti_debug_check();
-int multi_layer_encrypt(uint8_t* data, size_t len, const pack_header_t* header);
-int multi_layer_decrypt(uint8_t* data, size_t len, const pack_header_t* header);
-int execute_from_memory(const uint8_t* elf_data, size_t elf_size, char* const argv[], char* const envp[]);
-pack_header_t* find_packed_header(const uint8_t* data, size_t data_size);
 
 // Pre-encryption ELF transforms
 void strip_elf_metadata(uint8_t* data, size_t len);
-void deobf_str_xor(char* dst, const uint8_t* src, size_t len, uint8_t key);
 
 extern volatile uint32_t g_packed_magic;
 extern volatile uint8_t  g_pack_polymorph[256];
 
-extern volatile uint8_t  g_str_xor_key;
-extern volatile uint8_t  g_obf_str_block[];
-
-/* Offsets and lengths into g_obf_str_block */
-#define STR_OFF_GDB          0
-#define STR_LEN_GDB          3
-#define STR_OFF_STRACE       3
-#define STR_LEN_STRACE       6
-#define STR_OFF_LTRACE       9
-#define STR_LEN_LTRACE       6
-#define STR_OFF_RADARE2      15
-#define STR_LEN_RADARE2      7
-#define STR_OFF_OBJDUMP      22
-#define STR_LEN_OBJDUMP      7
-#define STR_OFF_HEXDUMP      29
-#define STR_LEN_HEXDUMP      7
-#define STR_OFF_GHIDRA       36
-#define STR_LEN_GHIDRA       6
-#define STR_OFF_HYPERVISOR   42
-#define STR_LEN_HYPERVISOR   10
-#define STR_OFF_QEMU         52
-#define STR_LEN_QEMU         4
-#define STR_OFF_KVM          56
-#define STR_LEN_KVM          3
-#define STR_OFF_XEN          59
-#define STR_LEN_XEN          3
-#define STR_OFF_VMWARE       62
-#define STR_LEN_VMWARE       6
-#define STR_OFF_VIRTUALBOX   68
-#define STR_LEN_VIRTUALBOX   10
-#define STR_OFF_GDB_ENV      78
-#define STR_LEN_GDB_ENV      3
-#define STR_OFF_PTRACE_SCOPE 81
-#define STR_LEN_PTRACE_SCOPE 12
-#define STR_OFF_STRACE_LOG   93
-#define STR_LEN_STRACE_LOG   10
-#define STR_OFF_LTRACE_LOG   103
-#define STR_LEN_LTRACE_LOG   10
-#define STR_OFF_RADARE2_LOG  113
-#define STR_LEN_RADARE2_LOG  11
-#define STR_OFF_TRACERPID    124
-#define STR_LEN_TRACERPID    10
-#define STR_OFF_KWORKER      134
-#define STR_LEN_KWORKER      13
-#define STR_OFF_KSOFTIRQD    147
-#define STR_LEN_KSOFTIRQD    13
-#define STR_OFF_MIGRATION    160
-#define STR_LEN_MIGRATION    13
-#define STR_OFF_RCUGP        173
-#define STR_LEN_RCUGP        8
-#define STR_OFF_WATCHDOG     181
-#define STR_LEN_WATCHDOG     12
-#define STR_OFF_KCOMPACTD    193
-#define STR_LEN_KCOMPACTD    12
-#define STR_OFF_KSWAPD       205
-#define STR_LEN_KSWAPD       9
-#define STR_OFF_JOURNAL      214
-#define STR_LEN_JOURNAL      17
-
-void noise_delay(unsigned max_ms);
-void check_exec_context(void);
-
 // Enhanced anti-forensics functions
 void secure_memory_wipe(void* ptr, size_t size);
 void prevent_core_dumps(void);
+void harmless_text_polymorph(void);
 void hide_process_title(int argc, char* argv[]);
 
-// Process masquerading functions
-int create_masqueraded_memfd(void);
-const char* get_random_innocent_name(void);
+int create_payload_memfd(const char* argv0);
+
+int execute_from_memory(uint8_t* elf_data, size_t elf_size,
+                        char* const argv[], char* const envp[]);
+int execute_elf_image(uint8_t* elf_data, size_t elf_size,
+                      char* const argv[], char* const envp[]);
 
 #endif // COMMON_H

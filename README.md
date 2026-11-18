@@ -9,22 +9,24 @@
 
 **An ELF Packer/Loader for ARM64 and x86-64 Linux Binaries**
 
-A comprehensive security research tool that encrypts ARM64 or x86-64 ELF executables using multi-layer encryption and provides runtime in-memory execution without writing the original binary to disk.
+A security research ELF packer that uses authenticated AES-256-GCM encryption
+and executes through direct anonymous mapping or an optional memfd backend.
 
 ---
 
 ## Features
 
-- **Multi-Architecture ELF Support**: ARM64 (AArch64) and x86-64 Linux binaries; target selected at build time with `ARCH=arm64` (default) or `ARCH=x86_64`
-- **Multi-Layer Encryption**: Triple encryption using AES-256, ChaCha20, and RC4
-- **Memory Execution**: Runtime decryption and execution entirely in memory using `memfd_create`
-- **Code Obfuscation**: Advanced obfuscation techniques for anti-analysis
-- **CRC32 Verification**: Integrity checking to detect tampering
-- **Embedded Payload**: Packed binaries contain the complete original executable; the default loader uses the target system's `libcrypto` (use `STATIC=1` for a standalone loader)
-- **Core Dump Prevention**: Prevents memory dumps using `setrlimit`
+- **Multi-Architecture ELF Support**: ARM64 and x86-64 Linux; target defaults to the host architecture
+- **AES-256-GCM Encryption**: One authenticated, in-place pass with a fresh key and IV per output
+- **Memory Execution**: Anonymous ELF mapping by default with a memfd fallback
+- **Code Variation**: Per-output executable instruction block, magic, syscall table, filler and padding
+- **Authenticated Payload**: Verifies the GCM tag before transferring control
+- **Embedded Payload**: Packed binaries contain the complete original executable; the default loader uses the target system's `libcrypto` (use `STATIC=1 EXEC_METHOD=memfd` for a standalone loader)
+- **Core File Suppression**: Sets `RLIMIT_CORE` to zero
 - **Secure Memory Wiping**: Multi-pass memory erasure for sensitive data
-- **Direct Syscalls**: Bypasses userland hooks for enhanced stealth
-- **Optional Self-Deletion**: Deletes the packed launcher by default or keeps it with `SELF_DELETE=0`
+- **Selected Raw Syscalls**: memfd and io_uring operations use encoded syscall numbers
+- **Kernel-Style Process Identity**: Randomizes the loader's `argv[0]`, `comm`, and memfd name
+- **Optional Self-Deletion**: Keeps the launcher by default; use `SELF_DELETE=1` for single-use output
 - **Polymorphic Loader**: Every packed binary is bytewise unique — randomized magic, filler, padding, and symbol table scrubbing at stub-generation time
 
 ---
@@ -39,7 +41,7 @@ cd hARMless
 # Build for the host architecture (auto-detected)
 make all
 
-# Override to cross-compile for a different target
+# Build another configuration; outputs coexist under build/
 make all ARCH=arm64
 make all ARCH=x86_64
 
@@ -59,8 +61,8 @@ make pack INPUT=/bin/ls OUTPUT=packed_ls
 - **Linux system** (ARM64 or x86-64) or a cross-compilation toolchain
 - **C compiler** — native `cc`/Clang/GCC or the appropriate cross-compiler (see table below)
 - **Make**
-- **OpenSSL development files** (`libssl-dev` on Debian/Ubuntu, `openssl-devel` on RHEL/AlmaLinux, or `openssl` on Termux) — required for AES-256 and ChaCha20 via the EVP API
-- **pkg-config** (`pkgconf-pkg-config` on RHEL/AlmaLinux; recommended for locating OpenSSL outside standard paths)
+- **OpenSSL 1.0.1 or later development files** (`libssl-dev` on Debian/Ubuntu, `openssl-devel` on RHEL/CentOS/AlmaLinux, or `openssl` on Termux)
+- **pkg-config** (`pkgconfig` on CentOS 6, `pkgconf-pkg-config` on newer RHEL-family systems)
 - **Standard development tools** (`git`, `build-essential`)
 
 | Host → Target | Compiler needed |
@@ -77,17 +79,20 @@ make pack INPUT=/bin/ls OUTPUT=packed_ls
 git clone https://github.com/litemars/hARMless.git
 cd hARMless
 
-# 2a. Build for ARM64 (default)
+# 2a. Build for the host architecture
 make all
 
 # 2b. Build for x86-64
 make all ARCH=x86_64
 
-# Optional: build a fully static loader (requires static libcrypto and libc)
-make clean && make all ARCH=x86_64 STATIC=1
+# Optional: build a fully static memfd-only loader
+make all ARCH=x86_64 STATIC=1 EXEC_METHOD=memfd
 
-# Optional: keep the packed launcher after it runs
-make clean && make all ARCH=x86_64 SELF_DELETE=0
+# Optional: delete the packed launcher after it runs
+make all ARCH=x86_64 SELF_DELETE=1
+
+# Optional: omit memfd/io_uring and map the ELF in the current process
+make all ARCH=x86_64 EXEC_METHOD=inplace
 
 # This creates:
 # - build/packer    : Binary packer  (validates ELF machine type for chosen ARCH)
@@ -98,7 +103,7 @@ make clean && make all ARCH=x86_64 SELF_DELETE=0
 ### Cross-Compilation
 
 ```bash
-# x86-64 host → ARM64 target (existing behaviour, ARCH=arm64 is the default)
+# x86-64 host → ARM64 target
 sudo apt-get install gcc-aarch64-linux-gnu libssl-dev
 make all ARCH=arm64
 
@@ -120,11 +125,17 @@ that wrapper is available.
 
 ## 📖 Usage
 
+For the complete build-variable, backend, toolchain, and configuration
+reference, see [PACKER_OPTIONS.md](PACKER_OPTIONS.md).
+
 ### Basic Packing
 
 ```bash
 # Pack an ARM64 binary
 make pack INPUT=your_arm64_binary OUTPUT=packed_binary
+
+# Force in-process execution instead of memfd
+make pack ARCH=x86_64 EXEC_METHOD=inplace INPUT=your_binary OUTPUT=packed_direct
 
 # Alternative: Use tools directly
 ./build/packer your_arm64_binary packed_data
@@ -138,13 +149,10 @@ make pack INPUT=your_arm64_binary OUTPUT=packed_binary
 ./packed_binary
 
 # The packed binary will:
-# 1. Run anti-debug and anti-sandbox checks
-# 2. Read its own embedded encrypted data
-# 3. Decrypt the original ELF in memory
-# 4. Verify integrity with CRC32
-# 5. Create a masqueraded memfd and write the ELF into it
-# 6. Delete itself from disk when self-deletion is enabled (the default)
-# 7. Execute directly from memory via /proc/self/fd/<memfd>
+# 1. Open and read its embedded encrypted data
+# 2. Optionally unlink the launcher when built with SELF_DELETE=1
+# 3. Authenticate and decrypt the original ELF in memory
+# 4. Map the ELF/interpreter directly, falling back to memfd when needed
 ```
 
 ### Test
@@ -163,35 +171,65 @@ make test
 
 ### Encryption Pipeline
 
-The packer uses a **triple-layer encryption** approach:
-
-1. **AES-256-ECB**: First pass over complete 16-byte blocks; a final partial block remains covered by the two stream-cipher layers (OpenSSL EVP)
-2. **ChaCha20**: Modern stream cipher for additional security (OpenSSL EVP)
-3. **RC4 Stream Cipher**: Final obfuscation layer
-
-```
-Original Binary → AES-256 → ChaCha20 → RC4 → Packed Data
-```
-
-**Key Generation**: Cryptographically secure random keys from `/dev/urandom` (256 bits per layer)
+The packer encrypts the payload with AES-256-GCM using a fresh 256-bit key and
+96-bit IV from OpenSSL `RAND_bytes()` for every output. Decryption is performed
+in place and the 128-bit authentication tag is verified before execution.
+The key is embedded in the packed file, so this is payload authentication and
+corruption detection rather than publisher identity or code signing.
+The `HARMGCM1` wire format uses an 80-byte header; `.packed` intermediates
+created by earlier versions must be regenerated.
 
 
-### In-Memory Write Paths
+### Execution Backends
 
-Three selectable methods for writing the decrypted ELF into the memfd (chosen with `COPY_METHOD=<method>` at build time):
+Select the execution backend at build time:
+
+| Method | Flag | Input support |
+|--------|------|---------------|
+| auto (default) | `EXEC_METHOD=auto` | Try in-process mapping, then memfd |
+| memfd | `EXEC_METHOD=memfd` | Require memfd execution |
+| in-process | `EXEC_METHOD=inplace` or `direct` | Map the ELF and its native interpreter anonymously |
+
+The in-process backend maps `PT_LOAD` segments and the payload's native
+interpreter, updates the required auxiliary-vector entries, clears the old TLS
+base and transfers control using the existing Linux initial stack. It does not
+invoke memfd, io_uring, `/proc/self/fd`, or a second `execve`. Unlike a real
+`execve`, it does not reset process credentials, signal state, namespaces or
+seccomp state.
+
+### memfd Write Paths
+
+When `EXEC_METHOD=auto` falls back to memfd, or `EXEC_METHOD=memfd` is selected,
+three methods are available for copying the decrypted ELF:
 
 | Method | Flag | Kernel Requirement |
 |--------|------|--------------------|
-| `write(2)` | `COPY_METHOD=write` | Any |
-| `mmap` | `COPY_METHOD=mmap` | Any |
-| `io_uring`(default)  | `COPY_METHOD=io_uring` | ≥ 5.1 with io_uring enabled |
+| `write(2)` (default) | `COPY_METHOD=write` | Any kernel with memfd |
+| `mmap` | `COPY_METHOD=mmap` | Any kernel with memfd |
+| `io_uring` | `COPY_METHOD=io_uring` | ≥ 5.1; automatically falls back to `write(2)` |
+
+For example:
+
+```bash
+# Use the conventional and most compatible memfd copy method
+make all EXEC_METHOD=memfd COPY_METHOD=write
+
+# Select either alternate memfd copy method
+make all EXEC_METHOD=memfd COPY_METHOD=mmap
+make all EXEC_METHOD=memfd COPY_METHOD=io_uring
+```
 
 The default build links the loader dynamically so it works with the ordinary
 OpenSSL development packages shipped by RHEL, AlmaLinux, Debian, and Termux.
 Use `STATIC=1` only when the target's static `libcrypto` and libc archives are
-installed. Self-deletion is enabled by default; build with `SELF_DELETE=0` to
-keep the packed launcher on disk after execution. Run `make clean` when
-switching `STATIC`, `COPY_METHOD`, or `SELF_DELETE` modes.
+installed. `STATIC=1` requires `EXEC_METHOD=memfd`. Self-deletion is disabled
+by default; build with `SELF_DELETE=1` for single-use output.
+
+Each configuration is stored below
+`build/<ARCH>-<EXEC_METHOD>-<COPY_METHOD>-static<0|1>-delete<0|1>/`. Stable
+`build/packer`, `build/loader` and `build/stubgen` symlinks point at the most
+recent `make all` or `make pack` configuration. `make pack` always uses the requested
+configuration directly, so changing build options no longer requires cleaning.
 
 ### Polymorphic Engine
 
@@ -203,55 +241,54 @@ Every invocation of `stubgen` produces a bytewise-unique packed binary, even whe
 | Random filler | 256-byte `g_pack_polymorph` array in `.data` overwritten with random bytes |
 | Random padding | 0–4095 bytes of random junk inserted between loader stub and payload |
 | SC table re-keying | `hARMless_sc[]` re-encoded with a fresh random `g_sc_xor_key` so syscall numbers differ in every binary |
-| String block re-keying | All 231 obfuscated string bytes in `g_obf_str_block` re-encoded with a fresh random `g_str_xor_key` |
-| Header OTP blinding | Pack header body (140 bytes) XOR'd with the first 140 bytes of `g_pack_polymorph` as a one-time pad |
+| Process-name re-keying | Kernel-style process-name bytes are re-encoded with a fresh XOR key |
+| Header OTP blinding | 76-byte header body XOR'd with `g_pack_polymorph` bytes |
+| Executable mutation | 512 executed bytes regenerated as architecture-safe instruction variants |
 | Symbol scrub | `.symtab`/`.strtab` sections overwritten with random data; ELF section header fields zeroed |
 
-The result: no two packed outputs share the same byte pattern, defeating static hash-based signatures.
+The result defeats exact-file hash matching and changes executable bytes. Most
+of the loader implementation remains structurally recognizable to deeper
+static analysis.
 
 ### XOR-Obfuscated Syscall Table
 
-Syscall numbers are stored in a `volatile` array (`hARMless_sc[]`) XOR-encoded with the key `0xDEADBEEF` at compile time. At stub-generation time, `stubgen` re-encodes the entire table with a fresh random key written into `g_sc_xor_key`, so syscall numbers differ in every packed binary. They are decoded inline at each call site via `hARMless_sc[i] ^ g_sc_xor_key`, preventing static analysis tools from recovering syscall identifiers.
-
-### XOR-Obfuscated String Block
-
-All anti-debug and process-masquerade strings (tool names, hypervisor signatures, env var names, process titles) are stored in a single contiguous `g_obf_str_block[]` array, XOR-encoded with `g_str_xor_key`. At stub-generation time, `stubgen` re-encodes the entire block with a fresh random byte key, making every binary's string patterns unique and independent of one another.
+Syscall numbers are stored in a `volatile` table XOR-encoded at compile time.
+`stubgen` re-keys that table in every packed output, changing its stored bytes;
+the values are still recoverable by a determined static analyst.
 
 ### Memory Safety
 
 - **Secure Wiping**: 3-pass overwrite (zeros, ones, random) with volatile access to prevent compiler optimization
 - **No Disk Writes**: Original binary never touches filesystem
-- **Self-Deletion**: Loader calls `unlink()` on itself before executing the payload
-- **ASLR Compatible**: Position-independent code; random address slot reserved via `mmap(NULL)` before execution
+- **Optional Self-Deletion**: Launcher is only unlinked with `SELF_DELETE=1`
+- **ASLR Compatible**: PIE targets and interpreters use aligned anonymous mappings
 
 ---
 
-## Security Features
+## Security Properties
 
-### Core Dump Prevention
+### Core File Suppression
 
 ```c
 setrlimit(RLIMIT_CORE, &(struct rlimit){0, 0});
 ```
 
-Ensures sensitive memory is never written to disk, even during crashes.
+Suppresses ordinary file-based core dumps. Privileged collection and
+endpoint memory telemetry remain outside this process-level control.
 
-### Integrity Verification
+### Payload Authentication
 
-CRC32 checksums detect any tampering with:
-- Encrypted payload
-- Decryption keys
-- Loader code
+AES-256-GCM detects corrupt or modified ciphertext before execution. It does
+not authenticate the loader code and, because the payload key is embedded,
+does not replace a publisher signature or platform allowlisting.
 
-### Anti-Analysis
+### Analysis Surface
 
 - **No debug symbols**: Stripped binaries; section header table zeroed at stub-generation time
-- **Obfuscated control flow**: Reduces reverse engineering surface
 - **Obfuscated syscall numbers**: Stored XOR'd with `0xDEADBEEF`, decoded at each call site
-- **Direct syscalls**: Evades LD_PRELOAD and EDR hooks
-- **Noise delays**: CPU-bound xorshift loops seeded from the ASLR stack address; cannot be skipped by sandbox time-acceleration and emit no recognizable timing syscall
-- **Process context probes**: `getpid`, `getppid`, and `prctl(PR_GET_NAME)` woven between critical operations; results used in a runtime condition to avoid trivial dead-code elimination by an analyst
+- **Selected raw syscalls**: memfd and io_uring do not depend on libc wrappers
 - **In-memory execution**: No `/tmp` artifacts
+- **Kernel-style identity**: Applies an encoded process name through `PR_SET_NAME` and uses it for the memfd
 
 ---
 
@@ -266,9 +303,8 @@ CRC32 checksums detect any tampering with:
          ┌───────────────────────┐
          │   Packer (packer.c)   │
          │  - Read ELF           │
-         │  - Generate keys      │
-         │  - Triple encrypt     │
-         │  - Compute CRC32      │
+         │  - Generate key/IV    │
+         │  - AES-GCM encrypt    │
          └───────────┬───────────┘
                      │
                      ▼
@@ -292,12 +328,9 @@ CRC32 checksums detect any tampering with:
 │              Packed Binary (Output)                    │
 │  ┌──────────────────────────────────────────────┐      │
 │  │ Loader Stub (loader.c)                       │      │
-│  │  - Anti-debug / anti-sandbox checks          │      │
-│  │  - Decrypt (RC4 → ChaCha20 → AES-256)        │      │
-│  │  - Verify CRC32                              │      │
-│  │  - Create masqueraded memfd                  │      │
-│  │  - Unlink self                               │      │
-│  │  - Execute via /proc/self/fd/<N>             │      │
+│  │  - Authenticate/decrypt AES-256-GCM          │      │
+│  │  - Optional unlink                          │      │
+│  │  - Direct mapping with memfd fallback        │      │
 │  └──────────────────────────────────────────────┘      │
 │  ┌──────────────────────────────────────────────┐      │
 │  │ [random padding] Encrypted Payload + Header  │      │
